@@ -3,12 +3,23 @@ import { session } from "telegraf";
 import dotenv from "dotenv";
 import axios, { AxiosRequestConfig, AxiosError } from "axios";
 import { components, operations } from "../schema/schema.d";
+import { Calendar } from "telegram-inline-calendar";
 
 dotenv.config();
 
 const bot = new Telegraf<SessionContext>(process.env.BOT_TOKEN || "");
 bot.use(session());
 const API_BASE_URL = process.env.API_BASE_URL || "http://54.255.252.24:8000";
+
+const calendar = new Calendar(bot, {
+  date_format: "YYYY-MM-DD HH:mm", // Ensure the format includes time
+  language: "en",
+  bot_api: "telegraf",
+  time_selector_mod: true, // Enable time selection
+  time_range: "08:00-20:00", // Example time range
+  time_step: "30m", // Example time step
+  start_date: "now", // Set the minimum selectable date to the current date
+});
 
 interface SessionData {
   booking?: Partial<components["schemas"]["CreateBookingRequest"]>;
@@ -29,17 +40,16 @@ async function apiRequest<T extends keyof operations>(
   const headers = {
     "Content-Type": "application/json",
     AccessToken: process.env.BOT_TOKEN || "",
-    TelegramId: ctx.from?.id.toString() || "",
-    TelegramUsername: ctx.from?.username || "",
+    TelegramId: "229325521",
+    TelegramUsername: "seidnichtmeshugge",
   };
 
-  // Map the operationId to the correct HTTP method
   const methodMap: { [key: string]: string } = {
     get_venues_telegram_venue__get: "GET",
     add_booking_telegram_booking__post: "POST",
     get_bookings_telegram_booking__get: "GET",
     get_user_profile_telegram_user_userProfile_get: "GET",
-    // Add other mappings as needed
+    delete_booking_telegram_booking_deleteBooking_delete: "DELETE",
   };
 
   const method = methodMap[operationId] || "GET";
@@ -175,10 +185,52 @@ bot.action(/^book_venue_(\d+)$/, async (ctx) => {
     const venueId = parseInt(match[1]);
     ctx.session.booking = { venue_id: venueId };
     await ctx.answerCbQuery();
-    await ctx.reply("📝 Please enter the booking description:");
+    await calendar.startNavCalendar(ctx);
   } else {
     await ctx.answerCbQuery("Invalid venue selection");
     await ctx.reply("Please try booking again with a valid venue.");
+  }
+});
+
+bot.on("callback_query", async (ctx) => {
+  const message = ctx.callbackQuery?.message;
+  const chatId = message?.chat?.id;
+
+  if (
+    !message ||
+    !chatId ||
+    message.message_id !== calendar.chats.get(chatId)
+  ) {
+    console.log("Callback query does not match calendar message");
+    return;
+  }
+
+  const res = await calendar.clickButtonCalendar(ctx);
+  console.log("Calendar button clicked, result:", res);
+
+  if (res === -1) {
+    console.log("Invalid calendar button click result:", res);
+    return;
+  }
+
+  if (!ctx.session.booking) {
+    ctx.session.booking = {};
+  }
+
+  if (!ctx.session.booking.start_time) {
+    ctx.session.booking.start_time = res.toString();
+    console.log("Start time set:", ctx.session.booking.start_time);
+    await ctx.reply("🕕 Please select the end time:");
+
+    console.log(`Start time selected: ${ctx.session.booking.start_time}`);
+    const currentDate = new Date(ctx.session.booking.start_time)
+      .toISOString()
+      .split("T")[0];
+    await calendar.startNavCalendar(ctx);
+  } else {
+    ctx.session.booking.end_time = res.toString();
+    console.log("End time set:", ctx.session.booking.end_time);
+    await createBooking(ctx);
   }
 });
 
@@ -188,18 +240,34 @@ async function createBooking(ctx: SessionContext) {
       const bookingData: components["schemas"]["CreateBookingRequest"] = {
         ...(ctx.session
           .booking as components["schemas"]["CreateBookingRequest"]),
-        users: [
-          ...(ctx.session.booking?.users || []),
-          ctx.from?.username || "",
-        ],
+        users: [ctx.from?.username || ""],
+        desc: "Gym booking", // Set default description
       };
+
+      // Fetch the venue name based on the venue_id
+      const venueResponse = await apiRequest(
+        "get_venues_telegram_venue__get",
+        "/telegram/venue/",
+        ctx
+      );
+      const venues = venueResponse.items as components["schemas"]["Venue"][];
+      const venue = venues.find((v) => v.id === bookingData.venue_id);
+      const venueName = venue ? venue.name : "Unknown";
+
       await apiRequest(
         "add_booking_telegram_booking__post",
         "/telegram/booking/",
         ctx,
         bookingData
       );
-      ctx.reply("✅ Booking created successfully!");
+      ctx.reply(
+        `✅ Booking created successfully!\n\n🔖 *Booking Summary:*\n🏢 *Venue:* ${venueName}\n📝 *Description:* ${
+          bookingData.desc
+        }\n🕒 *Start:* ${bookingData.start_time}\n🕕 *End:* ${
+          bookingData.end_time
+        }\n👤 *User:* ${ctx.from?.username || "Unknown"}`,
+        { parse_mode: "Markdown" }
+      );
     } catch (error) {
       ctx.reply("Error creating booking. Please try again later.");
     }
@@ -215,83 +283,26 @@ async function createBooking(ctx: SessionContext) {
 bot.command("mybookings", async (ctx) => {
   console.log("mybookings command called");
 
-  // Set this to true to use mock data, false to use real API
-  const useMockData = true;
-
   try {
-    let bookings;
-    let venues;
+    const response = (await apiRequest(
+      "get_bookings_telegram_booking__get",
+      "/telegram/booking/",
+      ctx,
+      null,
+      {
+        page: 1,
+        size: 50,
+      }
+    )) as components["schemas"]["Page_GetBookingRequest_"];
 
-    if (useMockData) {
-      // Mock venue data
-      venues = [
-        { id: 1, name: "SR1", desc: "Seminar Room 1" },
-        { id: 2, name: "SR2", desc: "Seminar Room 2" },
-        { id: 3, name: "SR3", desc: "Seminar Room 3" },
-        { id: 4, name: "SR4", desc: "Seminar Room 4" },
-        { id: 5, name: "SR5", desc: "Seminar Room 5" },
-        { id: 6, name: "TR1", desc: "Theme Room 1" },
-        { id: 7, name: "TR2", desc: "Theme Room 2" },
-        { id: 8, name: "TR3", desc: "Theme Room 3" },
-        { id: 9, name: "TR4", desc: "Theme Room 4" },
-        { id: 10, name: "Gym", desc: "Gym" },
-        { id: 11, name: "MPSH", desc: "Multi-purpose sports hall" },
-      ];
+    console.log("All bookings:", JSON.stringify(response, null, 2));
 
-      // Mock bookings data
-      bookings = [
-        {
-          id: 1,
-          venue_id: 1,
-          desc: "Team meeting",
-          start_time: "2023-05-01 10:00:00",
-          end_time: "2023-05-01 12:00:00",
-        },
-        {
-          id: 2,
-          venue_id: 3,
-          desc: "Study group",
-          start_time: "2023-05-02 14:00:00",
-          end_time: "2023-05-02 16:00:00",
-        },
-        {
-          id: 3,
-          venue_id: 10,
-          desc: "Workout session",
-          start_time: "2023-05-03 18:00:00",
-          end_time: "2023-05-03 19:30:00",
-        },
-      ];
-    } else {
-      // Real API calls
-      const venuesResponse = await apiRequest(
-        "get_venues_telegram_venue__get",
-        "/telegram/venue/",
-        ctx
-      );
-      venues = venuesResponse.items as components["schemas"]["Venue"][];
-
-      const bookingsResponse = await apiRequest(
-        "get_bookings_telegram_booking__get",
-        "/telegram/booking/",
-        ctx
-      );
-      bookings =
-        bookingsResponse.items as components["schemas"]["GetBookingRequest"][];
-    }
-
-    if (bookings.length === 0) {
+    if (response.items.length === 0) {
       ctx.reply("You have no bookings.");
     } else {
-      const bookingList = bookings
+      const bookingList = response.items
         .map((booking) => {
-          const venue = venues.find((v) => v.id === booking.venue_id);
-          const venueName = venue ? venue.name : "Unknown";
-          return `🔖 *Booking ID:* ${booking.venue_id}\n${getVenueEmoji(
-            venueName
-          )} *Venue:* ${venueName}\n📝 *Description:* ${
-            booking.desc
-          }\n🕒 *Start:* ${booking.start_time}\n🕕 *End:* ${booking.end_time}`;
+          return `🔖 *Booking ID:* ${booking.created_at}\n🏢 *Venue:* ${booking.venue_id}\n📝 *Description:* ${booking.desc}\n🕒 *Start:* ${booking.start_time}\n🕕 *End:* ${booking.end_time}`;
         })
         .join("\n\n");
       ctx.reply(`*Your bookings:*\n\n${bookingList}`, {
@@ -496,13 +507,6 @@ bot.on("text", (ctx) => {
       ctx.reply("🕕 Please enter the end time (YYYY-MM-DD HH:MM):");
     } else if (!ctx.session.booking.end_time) {
       ctx.session.booking.end_time = ctx.message.text;
-      ctx.reply(
-        "👥 Please enter the usernames of other participants (comma-separated):"
-      );
-    } else {
-      ctx.session.booking.users = ctx.message.text
-        .split(",")
-        .map((u) => u.trim());
       createBooking(ctx);
     }
   }

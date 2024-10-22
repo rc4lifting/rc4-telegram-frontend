@@ -608,6 +608,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Created By Id */
+            created_by_id: string;
             /** Venue Id */
             venue_id: number;
             /** Ig */
