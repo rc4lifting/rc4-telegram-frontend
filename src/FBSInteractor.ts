@@ -45,8 +45,7 @@ class FBSInteractor {
         // await FBSInteractor.bookSlot("2024-09-07 18:00:00", "2024-09-07 19:30:00", "Gym Booking - Benjamin Seow", 10, "Student Activities", 2);
 
         // date formating
-        // start_time: "2023-05-02 14:00:00"
-        // end_time: "2023-05-02 16:00:00"
+        // start_time: "2023-05-02 14:00:00, end_time: "2023-05-02 16:00:00"
         const [date, time] = startTime.split(" ");
         const [date_end, time_end] = endTime.split(" ");
 
@@ -60,8 +59,20 @@ class FBSInteractor {
         const start_time_form_value = "1800/01/01" + " " + time;
         const end_time_form_value = "1800/01/01" + " " + time_end;
 
-        if (year == null || month == null || day == null) {
-            throw new Error("Date Parts is null");
+        if (year == null) {
+            throw new Error("year is null");
+        }
+
+        if (month == null) {
+            throw new Error("month is null");
+        }
+
+        if (day == null) {
+            throw new Error("day is null");
+        }
+
+        if (usageType == null) {
+            throw new Error("Usage Type is null");
         }
 
         const month_parsed = month.replace(/^0+/, '');
@@ -92,12 +103,16 @@ class FBSInteractor {
             const searchFrame = frames.find(f => f.url() == 'https://utownfbs.nus.edu.sg/utown/modules/booking/search.aspx');
             
             if (searchFrame == null) {
-                throw new Error("Search Frame not found");
+                throw new ExpectedElementNotFound("Search Frame not found");
             }
 
             // fill up search frame with location, startdate, enddate + search
-            const facil_type_value = FBSInteractor.VENUES[locationID - 1]?.facil_type_value as string || "null";
-            const location_value = FBSInteractor.VENUES[locationID - 1]?.option_value as string || "null";
+            const venue = FBSInteractor.VENUES[locationID - 1];
+            if (!venue) {
+                throw new Error("Venue not found");
+            }
+            const facil_type_value = venue.facil_type_value as string || "null";
+            const location_value = venue.option_value as string || "null";
             await searchFrame.$('select[name="FacilityType$ctl02"]').then(eh => eh?.select(facil_type_value)); // facil type
             await searchFrame.$('select[name="Facility$ctl02"]').then(eh => eh?.select(location_value)); // facilities
             await FBSInteractor.sleep(5000); // wait for form to fully load, so that start date change is stable
@@ -109,7 +124,7 @@ class FBSInteractor {
             
             const calenderFrame = searchFrame.childFrames().find(f => f.url() == 'https://utownfbs.nus.edu.sg/utown/calendar/calendar.htm');
             if (calenderFrame == null) {
-                throw new Error("Calender Frame not found");
+                throw new ExpectedElementNotFound("Calender Frame not found");
             }
 
             await calenderFrame.$('select[id="selectMonth"]').then(eh => eh?.select(month_parsed)); // select month 1, 2, 3, 4, 5, ...
@@ -128,7 +143,7 @@ class FBSInteractor {
             
             const calenderFrameEnd = searchFrame.childFrames().find(f => f.url() == 'https://utownfbs.nus.edu.sg/utown/calendar/calendar.htm');
             if (calenderFrameEnd == null) {
-                throw new Error("Calender Frame not found");
+                throw new ExpectedElementNotFound("Calender Frame not found");
             }
 
             await calenderFrameEnd.$('select[id="selectMonth"]').then(eh => eh?.select(month_parsed)); // select month 1, 2, 3, 4, 5, ...
@@ -149,7 +164,7 @@ class FBSInteractor {
             const bookingCalFrame = aftersearch_frames.find(f => f.url() == 'https://utownfbs.nus.edu.sg/utown/modules/BookingCalendar/Default.aspx');
             
             if (bookingCalFrame == null) {
-                throw new Error("Booking Calender Frame not found");
+                throw new ExpectedElementNotFound("Booking Calender Frame not found");
             }
 
             // find divAvailiable and click
@@ -161,7 +176,7 @@ class FBSInteractor {
             const iframeBookingElement = await bookingCalFrame.$('iframe[id="frmCreate"]');
 
             if (iframeBookingElement == null) {
-                throw new Error("Booking Frame not found");
+                throw new ExpectedElementNotFound("Booking Frame not found");
             }
 
             const bookingFrame = await iframeBookingElement.contentFrame();
@@ -169,21 +184,28 @@ class FBSInteractor {
             console.log("found booking frame");
             await bookingFrame.waitForNavigation({waitUntil: 'load'});
 
+            const usageTypeString = FBSInteractor.USAGE_TYPES[usageType]
+
+            if (usageTypeString == null) {
+                throw new Error("Usage Type not found");
+            }
+
             // fill up booking frame with name, startTime, endTime, usageType, chargeGroup, numAttendees, purpose
-            const usageTypeValue = FBSInteractor.USAGE_TYPES[usageType] || "null";
-            await bookingFrame.$('select[name="UsageType$ctl02"]').then(eh => eh?.select(usageTypeValue)); //usageType selecting
+            await bookingFrame.$('select[name="UsageType$ctl02"]').then(eh => eh?.select(usageTypeString)); //usageType selecting
             await FBSInteractor.sleep(2000); // wait for form to fully load!
             await bookingFrame.$('select[name="from$ctl02"]').then(eh => eh?.select(start_time_form_value)); // select start time 1800/01/01 ...
             await bookingFrame.$('select[name="to$ctl02"]').then(eh => eh?.select(end_time_form_value)); // select end time 1800/01/01 ...
+            await FBSInteractor.sleep(2000); // wait for form to fully load!
+
             await bookingFrame.locator('input[name="ExpectedNoAttendees$ctl02"]').fill(userCount.toString());
             await bookingFrame.$('select[name="ChargeGroup$ctl02"]').then(eh => eh?.select('1'));
             await bookingFrame.locator('textarea[name="Purpose$ctl02"]').fill(purpose);
+            await FBSInteractor.sleep(3000); // wait for form to fully load!
 
             // submit booking frame
-            await bookingFrame.locator('input[id="btnCreateBooking"]').click()
-            await bookingFrame.waitForNavigation({waitUntil: 'load'});
+            await bookingFrame.locator('input[id="btnCreateBooking"]').click()            
+            await FBSInteractor.sleep(15000); // wait for elements to be fully loaded!
             console.log("booking submitted");
-            await FBSInteractor.sleep(10000); // wait for elements to be fully loaded!
             
             // anticipate for error message or new booking reference number
             const errorMsgElement = await bookingFrame.$('span[id="labelMessage1"]');
@@ -194,21 +216,71 @@ class FBSInteractor {
                     (el) => el.textContent?.trim()
                 );
 
-                if (errorMessage == "Start time must be 30 minutes before currenttime") {
-                    throw new Error(
+                if (errorMessage == "Start time must be 30 minutes before currenttime" || errorMessage == "End time must be later than start time") {
+                    throw new InvalidBookingTimeException(
                         errorMessage ? errorMessage : "Booking failed (null message)"
                     );
                 } 
 
+                if (errorMessage == "The specified slot is booked by another user" ) {
+                    throw new SlotTakenException(
+                        errorMessage ? errorMessage : "Booking failed (null message)"
+                    );
+                }
+
                 throw new Error(errorMessage ? errorMessage : "Booking failed (null message)");
             }
-        
+
+            //Get booking number
+            await bookingFrame.waitForSelector('table#BookingReferenceNumber tr td');
+            const bookingId = await bookingFrame.evaluate(() => {
+                const elements = document.querySelectorAll('table#BookingReferenceNumber tr td');
+                return elements[1]?.textContent;
+            });
+            console.log(bookingId); // use this to store into database etc
+
             await browser.close();
+            console.log("booking - web booking completed on UtownFBS");
 
         } catch (error) {
+            // when error, browser dont close
             console.log("error: ", error);
-            throw error;
-        }
+
+        } 
+    }
+}
+
+// Errors 
+export class InvalidBookingTimeException extends Error {
+    name: string;
+    message: string;
+
+    constructor(message: string) {
+        super(message);
+        this.name = "InvalidBookingTimeException";
+        this.message = message;
+    }
+} 
+
+export class SlotTakenException extends Error {
+    name: string;
+    message: string;
+
+    constructor(message: string) {
+        super(message);
+        this.name = "SlotTakenException";
+        this.message = message;
+    }
+}
+
+export class ExpectedElementNotFound extends Error {
+    name: string;
+    message: string;
+
+    constructor(message: string) {
+        super(message);
+        this.name = "ExpectedElementNotFound";
+        this.message = message;
     }
 }
 
