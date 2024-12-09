@@ -3,31 +3,507 @@ import { session } from "telegraf";
 import dotenv from "dotenv";
 import axios, { AxiosRequestConfig, AxiosError } from "axios";
 import { components, operations } from "../schema/schema.d";
-import { Calendar } from "telegram-inline-calendar";
 
 dotenv.config();
 
-const bot = new Telegraf<SessionContext>(process.env.BOT_TOKEN || "");
-bot.use(session());
-const API_BASE_URL = process.env.API_BASE_URL || "http://54.255.252.24:8000";
+export type BookingStep = "start_date" | "start_time" | "end_date" | "end_time" | "confirm";
 
-const calendar = new Calendar(bot, {
-  date_format: "YYYY-MM-DD HH:mm", // Ensure the format includes time
-  language: "en",
-  bot_api: "telegraf",
-  time_selector_mod: true, // Enable time selection
-  time_range: "08:00-20:00", // Example time range
-  time_step: "30m", // Example time step
-  start_date: "now", // Set the minimum selectable date to the current date
-});
-
-interface SessionData {
-  booking?: Partial<components["schemas"]["CreateBookingRequest"]>;
+export interface SessionData {
+  currentBooking?: {
+    step: BookingStep;
+    startDate?: string;
+    startTime?: string;
+    endDate?: string;
+    endTime?: string;
+    startOffset?: number;
+    endOffset?: number;
+    venue_id?: number;
+  };
+  booking?: any;
 }
 
-interface SessionContext extends Context {
+export interface SessionContext extends Context {
   session: SessionData;
 }
+
+export interface CalendarBookingData {
+  venue_id: number;
+  start_date: string;
+  start_time: string;
+  end_date: string;
+  end_time: string;
+}
+
+export class BookingCalendar {
+  bot: Telegraf<SessionContext>;
+  dateRangeDays: number;
+  maxWeeks: number;
+  timeStepMinutes: number;
+  startHour: number;
+  endHour: number;
+  private onBookingDataReady?: (bookingData: CalendarBookingData, ctx: SessionContext) => Promise<void>;
+
+  constructor(
+    bot: Telegraf<SessionContext>, 
+    options?: {
+      dateRangeDays?: number;
+      maxWeeks?: number;
+      timeStepMinutes?: number;
+      startHour?: number;
+      endHour?: number;
+    },
+    onBookingDataReady?: (bookingData: CalendarBookingData, ctx: SessionContext) => Promise<void>
+  ) {
+    this.bot = bot;
+    this.dateRangeDays = options?.dateRangeDays || 7;
+    this.maxWeeks = options?.maxWeeks || 2;
+    this.timeStepMinutes = options?.timeStepMinutes || 30;
+    this.startHour = options?.startHour || 8;
+    this.endHour = options?.endHour || 20;
+    this.onBookingDataReady = onBookingDataReady;
+  }
+
+  async startBookingFlow(ctx: SessionContext, venue_id: number) {
+    ctx.session.currentBooking = {
+      step: "start_date",
+      startOffset: 0,
+      endOffset: 0,
+      venue_id: venue_id
+    };
+    
+    const markup = this.buildDateKeyboard("start_date_", "start_nav_", 0);
+    await ctx.reply("📅 Select a *start date*:", {
+      parse_mode: "Markdown",
+      reply_markup: markup
+    });
+  }
+
+  async handleCallbackQuery(ctx: SessionContext) {
+    const data = (ctx.callbackQuery as any).data;
+    if (!data || !ctx.session.currentBooking) return;
+
+    const state = ctx.session.currentBooking;
+
+    // Navigation for start date
+    if (data.startsWith("start_nav_")) {
+      const offset = parseInt(data.replace("start_nav_", ""), 10);
+      await ctx.answerCbQuery();
+      state.startOffset = offset;
+      await this.renderStartDateSelection(ctx, offset);
+      return;
+    }
+
+    // Navigation for end date
+    if (data.startsWith("end_nav_")) {
+      const offset = parseInt(data.replace("end_nav_", ""), 10);
+      await ctx.answerCbQuery();
+      state.endOffset = offset;
+      await this.renderEndDateSelection(ctx, offset);
+      return;
+    }
+
+    // Cancel action
+    if (data === "cancel_booking") {
+      await ctx.answerCbQuery("Booking canceled");
+      delete ctx.session.currentBooking;
+      try {
+        await ctx.editMessageText("Booking canceled.");
+      } catch {
+        await ctx.reply("Booking canceled.");
+      }
+      return;
+    }
+
+    switch (state.step) {
+      case "start_date":
+        if (data.startsWith("start_date_")) {
+          const dateISO = data.replace("start_date_", "");
+          await ctx.answerCbQuery(`Selected start date: ${this.formatDate(new Date(dateISO))}`);
+          state.startDate = dateISO;
+          state.step = "start_time";
+          await this.renderStartTimeSelection(ctx, dateISO);
+        }
+        break;
+
+      case "start_time":
+        if (data.startsWith("start_time_")) {
+          const startTime = data.replace("start_time_", "");
+          await ctx.answerCbQuery(`Selected start time: ${startTime}`);
+          state.startTime = startTime;
+          state.step = "end_date";
+          state.endOffset = 0;
+          await this.renderEndDateSelection(ctx, 0);
+        }
+        break;
+
+      case "end_date":
+        if (data.startsWith("end_date_")) {
+          const dateISO = data.replace("end_date_", "");
+          await ctx.answerCbQuery(`Selected end date: ${this.formatDate(new Date(dateISO))}`);
+          state.endDate = dateISO;
+          state.step = "end_time";
+          await this.renderEndTimeSelection(ctx, state.startDate!, state.startTime!, dateISO);
+        }
+        break;
+
+      case "end_time":
+        if (data.startsWith("end_time_")) {
+          const endTime = data.replace("end_time_", "");
+          await ctx.answerCbQuery(`Selected end time: ${endTime}`);
+          state.endTime = endTime;
+          state.step = "confirm";
+          await this.renderConfirmation(ctx, state.startDate!, state.startTime!, state.endDate!, endTime);
+        }
+        break;
+
+      case "confirm":
+        if (data === "confirm_booking") {
+          const { startDate, startTime, endDate, endTime, venue_id } = state;
+          
+          if (!startDate || !startTime || !endDate || !endTime || !venue_id) {
+            await ctx.answerCbQuery("Missing booking information");
+            return;
+          }
+
+          if (this.onBookingDataReady) {
+            await this.onBookingDataReady({
+              venue_id,
+              start_date: startDate,
+              start_time: startTime,
+              end_date: endDate,
+              end_time: endTime
+            }, ctx);
+          }
+          return;
+        }
+        break;
+    }
+  }
+
+  private async renderStartDateSelection(ctx: SessionContext, offset: number) {
+    const markup = this.buildDateKeyboard("start_date_", "start_nav_", offset);
+    await this.editOrSend(ctx, "📅 Select a *start date*:", markup);
+  }
+
+  private async renderStartTimeSelection(ctx: SessionContext, dateISO: string) {
+    const date = new Date(dateISO);
+    const now = new Date();
+    const slots = this.generateTimeSlots(date, now, true);
+    if (slots.length === 0) {
+      try {
+        await ctx.editMessageText("No available start times for the selected date. Please pick a different start date.");
+      } catch {
+        await ctx.reply("No available start times for the selected date. Please pick a different start date.");
+      }
+      ctx.session.currentBooking!.step = "start_date"; 
+      return;
+    }
+    const buttons = slots.map(slot => Markup.button.callback(slot, `start_time_${slot}`));
+    const markup = {
+      inline_keyboard: [
+        ...this.chunkButtons(buttons, 4),
+        [Markup.button.callback("❌ Cancel", "cancel_booking")]
+      ]
+    };
+    try {
+      await ctx.editMessageText(
+        `Start Date: ${this.formatDate(date)}\n\nSelect a *start time*:`,
+        { parse_mode: "Markdown", reply_markup: markup }
+      );
+    } catch {
+      await ctx.reply(
+        `Start Date: ${this.formatDate(date)}\n\nSelect a *start time*:`,
+        { parse_mode: "Markdown", reply_markup: markup }
+      );
+    }
+  }
+
+  private async renderEndDateSelection(ctx: SessionContext, offset: number) {
+    const markup = this.buildDateKeyboard("end_date_", "end_nav_", offset);
+    try {
+      await ctx.editMessageText("Select an *end date*:", { parse_mode: "Markdown", reply_markup: markup });
+    } catch {
+      await ctx.reply("Select an *end date*:", { parse_mode: "Markdown", reply_markup: markup });
+    }
+  }
+
+  private async renderEndTimeSelection(ctx: SessionContext, startDateISO: string, startTime: string, endDateISO: string) {
+    const startDate = new Date(startDateISO);
+    const endDate = new Date(endDateISO);
+
+    const [startHour, startMin] = startTime.split(":").map(Number);
+    const startDateTime = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), startHour, startMin);
+
+    const now = new Date();
+    let slots: string[];
+    if (this.isSameDay(startDate, endDate)) {
+      slots = this.generateTimeSlots(endDate, now, false, startDateTime);
+    } else {
+      slots = this.generateTimeSlots(endDate, now, true);
+    }
+
+    if (slots.length === 0) {
+      try {
+        await ctx.editMessageText("No end times available for the selected date. Please pick a different end date.");
+      } catch {
+        await ctx.reply("No end times available for the selected date. Please pick a different end date.");
+      }
+      ctx.session.currentBooking!.step = "end_date"; 
+      return;
+    }
+
+    const buttons = slots.map(slot => Markup.button.callback(slot, `end_time_${slot}`));
+    const markup = {
+      inline_keyboard: [
+        ...this.chunkButtons(buttons, 4),
+        [Markup.button.callback("❌ Cancel", "cancel_booking")]
+      ]
+    };
+
+    try {
+      await ctx.editMessageText(
+        `Start: ${this.formatDateTime(startDateISO, startTime)}\nEnd Date: ${this.formatDate(endDate)}\n\nSelect an *end time*:`,
+        { parse_mode: "Markdown", reply_markup: markup }
+      );
+    } catch {
+      await ctx.reply(
+        `Start: ${this.formatDateTime(startDateISO, startTime)}\nEnd Date: ${this.formatDate(endDate)}\n\nSelect an *end time*:`,
+        { parse_mode: "Markdown", reply_markup: markup }
+      );
+    }
+  }
+
+  private async renderConfirmation(ctx: SessionContext, startDateISO: string, startTime: string, endDateISO: string, endTime: string) {
+    const startStr = this.formatDateTime(startDateISO, startTime);
+    const endStr = this.formatDateTime(endDateISO, endTime);
+    const markup = {
+      inline_keyboard: [
+        [Markup.button.callback("✅ Confirm", "confirm_booking"), 
+         Markup.button.callback("❌ Cancel", "cancel_booking")]
+      ]
+    };
+
+    try {
+      await ctx.editMessageText(
+        `**Please confirm your booking:**\n\nStart: ${startStr}\nEnd: ${endStr}`,
+        { parse_mode: "Markdown", reply_markup: markup }
+      );
+    } catch {
+      await ctx.reply(
+        `**Please confirm your booking:**\n\nStart: ${startStr}\nEnd: ${endStr}`,
+        { parse_mode: "Markdown", reply_markup: markup }
+      );
+    }
+  }
+
+  private buildDateKeyboard(prefix: string, navPrefix: string, offset: number) {
+    const now = new Date();
+    now.setHours(0,0,0,0);
+    const buttons: any[] = [];
+    for (let i = 0; i < this.dateRangeDays; i++) {
+      const day = new Date(now.getTime() + (i + offset * this.dateRangeDays) * 24*60*60*1000);
+      const label = this.formatShortDate(day);
+      buttons.push(Markup.button.callback(label, `${prefix}${day.toISOString()}`));
+    }
+
+    const navRow = [];
+    if (offset > 0) {
+      navRow.push(Markup.button.callback("⬅️ Prev Week", `${navPrefix}${offset-1}`));
+    }
+    if (offset < this.maxWeeks - 1) {
+      navRow.push(Markup.button.callback("Next Week ➡️", `${navPrefix}${offset+1}`));
+    }
+
+    const keyboard = [
+      ...this.chunkButtons(buttons, 4),
+      navRow.length ? navRow : [],
+      [Markup.button.callback("❌ Cancel", "cancel_booking")]
+    ];
+
+    return Markup.inlineKeyboard(keyboard).reply_markup;
+  }
+
+  private generateTimeSlots(date: Date, now: Date, isStartTime: boolean, startDateTime?: Date): string[] {
+    const slots: string[] = [];
+    for (let hour = this.startHour; hour <= this.endHour; hour++) {
+      for (let min = 0; min < 60; min += this.timeStepMinutes) {
+        const slotDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, min);
+        if (isStartTime) {
+          if (slotDate > now) {
+            slots.push(this.formatTime(slotDate));
+          }
+        } else {
+          if (startDateTime && slotDate > startDateTime) {
+            slots.push(this.formatTime(slotDate));
+          } else if (!startDateTime && slotDate > now) {
+            slots.push(this.formatTime(slotDate));
+          }
+        }
+      }
+    }
+    return slots;
+  }
+
+  private async editOrSend(ctx: SessionContext, text: string, markup: any) {
+    if (ctx.callbackQuery && ctx.callbackQuery.message) {
+      try {
+        await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: markup });
+        return;
+      } catch (error) {
+        // If editing fails, send a new message
+      }
+    }
+    await ctx.reply(text, { parse_mode: "Markdown", reply_markup: markup });
+  }
+
+  private chunkButtons(buttons: any[], size: number): any[] {
+    const result = [];
+    for (let i = 0; i < buttons.length; i += size) {
+      result.push(buttons.slice(i, i + size));
+    }
+    return result;
+  }
+
+  private formatDate(date: Date): string {
+    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', weekday: 'short', year: 'numeric' };
+    return date.toLocaleDateString('en-US', options);
+  }
+
+  private formatShortDate(date: Date): string {
+    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+    return date.toLocaleDateString('en-US', options);
+  }
+
+  private formatTime(date: Date): string {
+    const hour = String(date.getHours()).padStart(2,'0');
+    const min = String(date.getMinutes()).padStart(2,'0');
+    return `${hour}:${min}`;
+  }
+
+  private formatDateTime(dateISO: string, time: string): string {
+    const date = new Date(dateISO);
+    return `${this.formatDate(date)} ${time}`;
+  }
+
+  private isSameDay(d1: Date, d2: Date): boolean {
+    return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+  }
+}
+
+// Create bot
+const bot = new Telegraf<SessionContext>(process.env.BOT_TOKEN || "");
+bot.use(session({
+  defaultSession: () => ({ 
+    currentBooking: undefined,
+    booking: undefined
+  })
+}));
+const API_BASE_URL = process.env.API_BASE_URL || "http://54.255.252.24:8000";
+
+// Initialize calendar with validation and booking logic
+const calendar = new BookingCalendar(
+  bot,
+  {
+    dateRangeDays: 14,
+    timeStepMinutes: 30,
+    startHour: 8,
+    endHour: 20
+  },
+  async (bookingData: CalendarBookingData, ctx: SessionContext) => {
+    try {
+      const startDateTime = new Date(`${bookingData.start_date}T${bookingData.start_time}`);
+      const endDateTime = new Date(`${bookingData.end_date}T${bookingData.end_time}`);
+      
+      if (endDateTime <= startDateTime) {
+        try {
+          await ctx.editMessageText(
+            "❌ End time must be after start time. Please try again.",
+            { parse_mode: "Markdown" }
+          );
+        } catch {
+          await ctx.reply(
+            "❌ End time must be after start time. Please try again.",
+            { parse_mode: "Markdown" }
+          );
+        }
+        return;
+      }
+
+      const booking: components["schemas"]["CreateBookingRequest"] = {
+        venue_id: bookingData.venue_id,
+        start_time: `${bookingData.start_date.split('T')[0]} ${bookingData.start_time}:00`,
+        end_time: `${bookingData.end_date.split('T')[0]} ${bookingData.end_time}:00`,
+        users: ctx.from?.username ? [ctx.from.username] : [],
+        desc: `Venue booking by ${ctx.from?.username || 'Unknown user'}`
+      };
+
+      console.log('Booking data:', {
+        start_time: booking.start_time,
+        end_time: booking.end_time
+      });
+
+      await apiRequest(
+        "add_booking_telegram_booking__post",
+        "/telegram/booking/",
+        ctx,
+        booking
+      );
+
+      // Get venue details
+      const venueResponse = await apiRequest(
+        "get_venues_telegram_venue__get",
+        "/telegram/venue/",
+        ctx
+      );
+      const venues = venueResponse.items as components["schemas"]["Venue"][];
+      const venue = venues.find(v => v.id === booking.venue_id);
+      const venueName = venue ? venue.name : "Unknown venue";
+
+      try {
+        await ctx.editMessageText(
+          `✅ Booking created successfully!\n\n` +
+          `🔖 *Booking Summary:*\n` +
+          `🏢 *Venue:* ${venueName}\n` +
+          `📝 *Description:* ${booking.desc}\n` +
+          `🕒 *Start:* ${booking.start_time}\n` +
+          `🕕 *End:* ${booking.end_time}\n` +
+          `👤 *User:* ${ctx.from?.username || "Unknown"}`,
+          { parse_mode: "Markdown" }
+        );
+      } catch {
+        await ctx.reply(
+          `✅ Booking created successfully!\n\n` +
+          `🔖 *Booking Summary:*\n` +
+          `🏢 *Venue:* ${venueName}\n` +
+          `📝 *Description:* ${booking.desc}\n` +
+          `🕒 *Start:* ${booking.start_time}\n` +
+          `🕕 *End:* ${booking.end_time}\n` +
+          `👤 *User:* ${ctx.from?.username || "Unknown"}`,
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      delete ctx.session.currentBooking;
+
+    } catch (error) {
+      console.error('Booking creation error:', error);
+      try {
+        await ctx.editMessageText(
+          "❌ Error creating booking. Please try again later.\n\n" +
+          "If the problem persists, contact support.",
+          { parse_mode: "Markdown" }
+        );
+      } catch {
+        await ctx.reply(
+          "❌ Error creating booking. Please try again later.\n\n" +
+          "If the problem persists, contact support.",
+          { parse_mode: "Markdown" }
+        );
+      }
+      delete ctx.session.currentBooking;
+    }
+  }
+);
 
 async function apiRequest<T extends keyof operations>(
   operationId: T,
@@ -40,8 +516,8 @@ async function apiRequest<T extends keyof operations>(
   const headers = {
     "Content-Type": "application/json",
     AccessToken: process.env.BOT_TOKEN || "",
-    TelegramId: "229325521",
-    TelegramUsername: "seidnichtmeshugge",
+    TelegramId: String(ctx.from?.id || ""),
+    TelegramUsername: ctx.from?.username || "",
   };
 
   const methodMap: { [key: string]: string } = {
@@ -128,7 +604,6 @@ function getVenueEmoji(venueName: string): string {
     Gym: "🏋️",
     MPSH: "🏀",
   };
-
   return emojiMap[venueName] || "🏢";
 }
 
@@ -166,125 +641,50 @@ bot.command("book", async (ctx) => {
     );
     const venues = response.items as components["schemas"]["Venue"][];
     const keyboard = venues.map((venue) => [
-      Markup.button.callback(venue.name, `book_venue_${venue.id}`),
+      Markup.button.callback(`${getVenueEmoji(venue.name)} ${venue.name}`, `book_venue_${venue.id}`),
     ]);
-    ctx.reply("📅 Select a venue to book:", Markup.inlineKeyboard(keyboard));
+    await ctx.reply("📅 Select a venue to book:", {
+      reply_markup: Markup.inlineKeyboard(keyboard).reply_markup,
+      parse_mode: "Markdown"
+    });
   } catch (error) {
     ctx.reply("Error fetching venues. Please try again later.");
   }
 });
 
-// Booking flow
 bot.action(/^book_venue_(\d+)$/, async (ctx) => {
   console.log("Book venue action triggered");
-  if (!ctx.session) {
-    ctx.session = {};
-  }
   const match = ctx.match;
   if (match && match[1]) {
     const venueId = parseInt(match[1]);
-    ctx.session.booking = { venue_id: venueId };
     await ctx.answerCbQuery();
-    await calendar.startNavCalendar(ctx);
+    if (!ctx.session) {
+      ctx.session = {
+        currentBooking: undefined,
+        booking: undefined
+      };
+    }
+    try {
+      // Delete the original message with venue selection
+      if (ctx.callbackQuery.message) {
+        await ctx.deleteMessage();
+      }
+    } catch (error) {
+      console.error("Error deleting message:", error);
+    }
+    await calendar.startBookingFlow(ctx, venueId);
   } else {
     await ctx.answerCbQuery("Invalid venue selection");
     await ctx.reply("Please try booking again with a valid venue.");
   }
 });
 
-bot.on("callback_query", async (ctx) => {
-  const message = ctx.callbackQuery?.message;
-  const chatId = message?.chat?.id;
-
-  if (
-    !message ||
-    !chatId ||
-    message.message_id !== calendar.chats.get(chatId)
-  ) {
-    console.log("Callback query does not match calendar message");
-    return;
-  }
-
-  const res = await calendar.clickButtonCalendar(ctx);
-  console.log("Calendar button clicked, result:", res);
-
-  if (res === -1) {
-    console.log("Invalid calendar button click result:", res);
-    return;
-  }
-
-  if (!ctx.session.booking) {
-    ctx.session.booking = {};
-  }
-
-  if (!ctx.session.booking.start_time) {
-    ctx.session.booking.start_time = res.toString();
-    console.log("Start time set:", ctx.session.booking.start_time);
-    await ctx.reply("🕕 Please select the end time:");
-
-    console.log(`Start time selected: ${ctx.session.booking.start_time}`);
-    const currentDate = new Date(ctx.session.booking.start_time)
-      .toISOString()
-      .split("T")[0];
-    await calendar.startNavCalendar(ctx);
-  } else {
-    ctx.session.booking.end_time = res.toString();
-    console.log("End time set:", ctx.session.booking.end_time);
-    await createBooking(ctx);
-  }
-});
-
-async function createBooking(ctx: SessionContext) {
-  if (ctx.session && ctx.session.booking) {
-    try {
-      const bookingData: components["schemas"]["CreateBookingRequest"] = {
-        ...(ctx.session
-          .booking as components["schemas"]["CreateBookingRequest"]),
-        users: [ctx.from?.username || ""],
-        desc: "Gym booking", // Set default description
-      };
-
-      // Fetch the venue name based on the venue_id
-      const venueResponse = await apiRequest(
-        "get_venues_telegram_venue__get",
-        "/telegram/venue/",
-        ctx
-      );
-      const venues = venueResponse.items as components["schemas"]["Venue"][];
-      const venue = venues.find((v) => v.id === bookingData.venue_id);
-      const venueName = venue ? venue.name : "Unknown";
-
-      await apiRequest(
-        "add_booking_telegram_booking__post",
-        "/telegram/booking/",
-        ctx,
-        bookingData
-      );
-      ctx.reply(
-        `✅ Booking created successfully!\n\n🔖 *Booking Summary:*\n🏢 *Venue:* ${venueName}\n📝 *Description:* ${
-          bookingData.desc
-        }\n🕒 *Start:* ${bookingData.start_time}\n🕕 *End:* ${
-          bookingData.end_time
-        }\n👤 *User:* ${ctx.from?.username || "Unknown"}`,
-        { parse_mode: "Markdown" }
-      );
-    } catch (error) {
-      ctx.reply("Error creating booking. Please try again later.");
-    }
-    delete ctx.session.booking;
-  } else {
-    ctx.reply(
-      "No booking in progress. Please start a new booking with /book command."
-    );
-  }
-}
-
 // My bookings command
 bot.command("mybookings", async (ctx) => {
   console.log("mybookings command called");
 
   try {
-    const response = (await apiRequest(
+    const response = await apiRequest(
       "get_bookings_telegram_booking__get",
       "/telegram/booking/",
       ctx,
@@ -293,15 +693,13 @@ bot.command("mybookings", async (ctx) => {
         page: 1,
         size: 50,
       }
-    )) as components["schemas"]["Page_GetBookingRequest_"];
+    );
 
-    console.log("All bookings:", JSON.stringify(response, null, 2));
-
-    if (response.items.length === 0) {
+    if (!response.items || response.items.length === 0) {
       ctx.reply("You have no bookings.");
     } else {
       const bookingList = response.items
-        .map((booking) => {
+        .map((booking: any) => {
           return `🔖 *Booking ID:* ${booking.created_at}\n🏢 *Venue:* ${booking.venue_id}\n📝 *Description:* ${booking.desc}\n🕒 *Start:* ${booking.start_time}\n🕕 *End:* ${booking.end_time}`;
         })
         .join("\n\n");
@@ -315,10 +713,8 @@ bot.command("mybookings", async (ctx) => {
   }
 });
 
-// Test command
 bot.command("test", async (ctx) => {
   try {
-    // Perform a simple API request to check connectivity
     await apiRequest(
       "get_user_profile_telegram_user_userProfile_get",
       "/telegram/user/userProfile",
@@ -333,7 +729,6 @@ bot.command("test", async (ctx) => {
   }
 });
 
-// Profile command
 bot.command("profile", async (ctx) => {
   try {
     const profile = await apiRequest(
@@ -354,7 +749,6 @@ bot.command("profile", async (ctx) => {
   }
 });
 
-// Get all bookings
 bot.command("allbookings", async (ctx) => {
   try {
     const response = await apiRequest(
@@ -362,9 +756,8 @@ bot.command("allbookings", async (ctx) => {
       "/telegram/booking/",
       ctx
     );
-    const bookings =
-      response.items as components["schemas"]["GetBookingRequest"][];
-    if (bookings.length === 0) {
+    const bookings = response.items as components["schemas"]["GetBookingRequest"][];
+    if (!bookings || bookings.length === 0) {
       ctx.reply("There are no bookings.");
     } else {
       const bookingList = bookings
@@ -382,9 +775,8 @@ bot.command("allbookings", async (ctx) => {
   }
 });
 
-// Get booking by ID
 bot.command("getbooking", async (ctx) => {
-  const bookingId = ctx.message.text.split(" ")[1];
+  const bookingId = ctx.message?.text.split(" ")[1];
   if (!bookingId) {
     return ctx.reply("Please provide a booking ID. Usage: /getbooking <id>");
   }
@@ -396,9 +788,7 @@ bot.command("getbooking", async (ctx) => {
       null,
       { bookingId: bookingId }
     );
-    const booking = response.items.find(
-      (b: any) => b.id === parseInt(bookingId)
-    );
+    const booking = response.items.find((b: any) => b.id === parseInt(bookingId));
     if (booking) {
       ctx.reply(
         `🔖 *Booking details:*\n🏢 *Venue:* ${booking.venue_id}\n📝 *Description:* ${booking.desc}\n🕒 *Start:* ${booking.start_time}\n🕕 *End:* ${booking.end_time}`,
@@ -412,9 +802,8 @@ bot.command("getbooking", async (ctx) => {
   }
 });
 
-// Delete booking
 bot.command("deletebooking", async (ctx) => {
-  const bookingId = ctx.message.text.split(" ")[1];
+  const bookingId = ctx.message?.text.split(" ")[1];
   if (!bookingId) {
     return ctx.reply("Please provide a booking ID. Usage: /deletebooking <id>");
   }
@@ -432,7 +821,6 @@ bot.command("deletebooking", async (ctx) => {
   }
 });
 
-// Get all venues
 bot.command("allvenues", async (ctx) => {
   try {
     const response = await apiRequest(
@@ -452,9 +840,8 @@ bot.command("allvenues", async (ctx) => {
   }
 });
 
-// Get venue by ID
 bot.command("getvenue", async (ctx) => {
-  const venueId = ctx.message.text.split(" ")[1];
+  const venueId = ctx.message?.text.split(" ")[1];
   if (!venueId) {
     return ctx.reply("Please provide a venue ID. Usage: /getvenue <id>");
   }
@@ -482,35 +869,26 @@ bot.command("getvenue", async (ctx) => {
   }
 });
 
+// Callback query handler
+bot.on('callback_query', async (ctx) => {
+  if (ctx.callbackQuery && 'data' in ctx.callbackQuery) {
+    await calendar.handleCallbackQuery(ctx);
+  }
+});
+
 // Error handling
 bot.catch((err, ctx) => {
   console.error(`Error for ${ctx.updateType}`, err);
   ctx.reply("An error occurred. Please try again later.");
-  throw err; // Re-throw the error after handling
+  throw err;
 });
 
-// Launch bot
+// Launch the bot after all handlers are set
 bot.launch().catch((err) => {
   console.error("Error launching bot:", err);
   process.exit(1);
 });
 
-bot.on("text", (ctx) => {
-  console.log("Text message received:", ctx.message.text);
-  console.log("Current session state:", JSON.stringify(ctx.session, null, 2));
-  if (ctx.session && ctx.session.booking) {
-    if (!ctx.session.booking.desc) {
-      ctx.session.booking.desc = ctx.message.text;
-      ctx.reply("🕒 Please enter the start time (YYYY-MM-DD HH:MM):");
-    } else if (!ctx.session.booking.start_time) {
-      ctx.session.booking.start_time = ctx.message.text;
-      ctx.reply("🕕 Please enter the end time (YYYY-MM-DD HH:MM):");
-    } else if (!ctx.session.booking.end_time) {
-      ctx.session.booking.end_time = ctx.message.text;
-      createBooking(ctx);
-    }
-  }
-});
-// Enable graceful stop
+// Graceful stop
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
