@@ -2,7 +2,7 @@
 
 Before you begin, ensure you have met the following requirements:
 
-* You have installed [Node.js](https://nodejs.org/) (version 12.x or later)
+* You have installed [Bun](https://bun.sh) (latest version)
 * You have a Telegram account and have created a bot using [BotFather](https://core.telegram.org/bots#6-botfather)
 
 ## Setting up the project
@@ -10,24 +10,25 @@ Before you begin, ensure you have met the following requirements:
 To set up the project, follow these steps:
 
 1. Clone the repository:
-   ```
+   ```bash
    git clone https://github.com/your-username/your-repo-name.git
    cd your-repo-name
    ```
 
 2. Install the dependencies:
-   ```
-   npm install
+   ```bash
+   bun install
    ```
 
 3. Create a `.env` file in the root directory and add your bot token:
    ```
    BOT_TOKEN=your_bot_token_here
+   API_BASE_URL=your_api_url_here
    ```
 
 ## Running the bot
 
-To run the bot in development mode:
+To run the bot in development mode with hot reloading:
 
 ```
 npm run dev

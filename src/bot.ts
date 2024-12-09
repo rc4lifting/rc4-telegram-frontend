@@ -1,10 +1,7 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { session } from "telegraf";
-import dotenv from "dotenv";
 import axios, { AxiosRequestConfig, AxiosError } from "axios";
 import { components, operations } from "../schema/schema.d";
-
-dotenv.config();
 
 export type BookingStep = "start_date" | "start_time" | "end_date" | "end_time" | "confirm";
 
@@ -391,14 +388,14 @@ export class BookingCalendar {
 }
 
 // Create bot
-const bot = new Telegraf<SessionContext>(process.env.BOT_TOKEN || "");
+const bot = new Telegraf<SessionContext>(Bun.env.BOT_TOKEN || "");
 bot.use(session({
   defaultSession: () => ({ 
     currentBooking: undefined,
     booking: undefined
   })
 }));
-const API_BASE_URL = process.env.API_BASE_URL || "http://54.255.252.24:8000";
+const API_BASE_URL = Bun.env.API_BASE_URL || "http://54.255.252.24:8000";
 
 // Initialize calendar with validation and booking logic
 const calendar = new BookingCalendar(
@@ -515,7 +512,7 @@ async function apiRequest<T extends keyof operations>(
   const url = `${API_BASE_URL}${path}`;
   const headers = {
     "Content-Type": "application/json",
-    AccessToken: process.env.BOT_TOKEN || "",
+    AccessToken: Bun.env.BOT_TOKEN || "",
     TelegramId: String(ctx.from?.id || ""),
     TelegramUsername: ctx.from?.username || "",
   };

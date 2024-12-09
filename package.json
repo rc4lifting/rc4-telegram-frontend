@@ -1,22 +1,18 @@
 {
-  "name": "your-project-name",
+  "name": "rc4-telegram-frontend",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node --experimental-specifier-resolution=node --loader ts-node/esm src/bot.ts",
-    "dev": "nodemon --exec \"npm start\" --ext ts"
+    "dev": "bun --watch src/bot.ts",
+    "start": "bun src/bot.ts"
   },
   "dependencies": {
-    "dotenv": "^16.0.0",
-    "puppeteer": "^23.2.1",
-    "telegraf": "^4.7.0",
-    "telegram-inline-calendar": "^2.2.0"
+    "axios": "^1.7.9",
+    "telegraf": "^4.16.3"
   },
   "devDependencies": {
+    "bun-types": "latest",
     "@types/node": "^18.0.0",
-    "nodemon": "^2.0.15",
-    "telegram-inline-calendar-types": "^1.0.1",
-    "ts-node": "^10.9.1",
-    "typescript": "^4.9.0"
+    "typescript": "^5.0.0"
   }
 }
