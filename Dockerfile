@@ -13,8 +13,8 @@ ENV CHROME_PATH=/usr/bin/chromium
 WORKDIR /usr/src/app
 
 # Copy package files
-COPY package*.json ./
-COPY bun.lockb ./
+COPY package*.json ./ 2>/dev/null || true
+COPY bun.lockb ./ 2>/dev/null || true
 
 # Install dependencies
 RUN bun install

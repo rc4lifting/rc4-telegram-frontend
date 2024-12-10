@@ -22,7 +22,12 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: DOCKER_HUB_USERNAME,BOT_TOKEN,API_BASE_URL,UTOWNFBS_USERNAME,UTOWNFBS_PASSWORD
           script: |
-            cd /root/rc4-telegram-frontend || exit 1
+            set -e  # Exit on any error
+            echo "Starting deployment..."
+            cd /root/rc4-telegram-frontend || {
+              echo "Failed to change directory"
+              exit 1
+            }
             git pull origin docker-deploy || exit 1
             # Create .env file
             cat > .env << EOL
@@ -32,6 +37,7 @@ jobs:
             UTOWNFBS_PASSWORD=${UTOWNFBS_PASSWORD}
             EOL
             docker-compose down || echo "Warning: docker-compose down failed"
+            docker-compose build --build-arg VERSION=${GITHUB_SHA::8}
             docker-compose up --build -d || exit 1
             # Verify container is running
             sleep 10
