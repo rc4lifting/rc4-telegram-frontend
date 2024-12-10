@@ -1,5 +1,6 @@
-import puppeteer from 'puppeteer';
+import { type Browser, type Page, type ElementHandle, Frame } from "puppeteer";
 import dotenv from 'dotenv';
+import puppeteer from "puppeteer";
 
 dotenv.config();
 
@@ -81,7 +82,10 @@ class FBSInteractor {
         // booking automation
         try {
             console.log("web booking started");
-            const browser = await puppeteer.launch({browser: 'chrome', headless: false});
+            const browser = await puppeteer.launch({
+                headless: false,
+                executablePath: process.env.CHROME_PATH
+            });
             const page = await browser.newPage();
             console.log("browser has been set up");
 
@@ -113,8 +117,9 @@ class FBSInteractor {
             }
             const facil_type_value = venue.facil_type_value as string || "null";
             const location_value = venue.option_value as string || "null";
-            await searchFrame.$('select[name="FacilityType$ctl02"]').then(eh => eh?.select(facil_type_value)); // facil type
-            await searchFrame.$('select[name="Facility$ctl02"]').then(eh => eh?.select(location_value)); // facilities
+            await searchFrame.$('select[name="FacilityType$ctl02"]').then((eh: ElementHandle | null) => eh?.select(facil_type_value)); // facil type
+            await FBSInteractor.sleep(1000); // after selecting facil type, wait for page to load
+            await searchFrame.$('select[name="Facility$ctl02"]').then((eh: ElementHandle | null) => eh?.select(location_value)); // facilities
             await FBSInteractor.sleep(5000); // wait for form to fully load, so that start date change is stable
 
             // start date
@@ -122,7 +127,7 @@ class FBSInteractor {
 
             await searchFrame.waitForSelector('div[id="calendarDiv"]', {visible: true});
             
-            const calenderFrame = searchFrame.childFrames().find(f => f.url() == 'https://utownfbs.nus.edu.sg/utown/calendar/calendar.htm');
+            const calenderFrame = searchFrame.childFrames().find((f: Frame) => f.url() == 'https://utownfbs.nus.edu.sg/utown/calendar/calendar.htm');
             if (calenderFrame == null) {
                 throw new ExpectedElementNotFound("Calender Frame not found");
             }
@@ -130,10 +135,18 @@ class FBSInteractor {
             await calenderFrame.$('select[id="selectMonth"]').then(eh => eh?.select(month_parsed)); // select month 1, 2, 3, 4, 5, ...
             await calenderFrame.waitForSelector('td[id="day7"]');
 
-            await calenderFrame.$('select[id="selectYear"]').then(eh => eh?.select(year)); // select year 2024, 2025, ...
+            await calenderFrame.$('select[id="selectYear"]').then((eh: ElementHandle | null) => eh?.select(year)); // select year 2024, 2025, ...
             await calenderFrame.waitForSelector('td[id="day7"]');
 
-            (await calenderFrame.$(`::-p-xpath(//table[@class="textfont"]//td[normalize-space(text())="${day_parsed}"])`))?.click(); // select day 1, 2, 3, 4, 5, ...
+            await calenderFrame.evaluate((day) => {
+                const cells = document.querySelectorAll('table.textfont td');
+                for (const cell of cells) {
+                    if (cell.textContent?.trim() === day) {
+                        (cell as HTMLElement).click();
+                        break;
+                    }
+                }
+            }, day_parsed);
             await FBSInteractor.sleep(5000); // wait for end date to load after start date is changed
 
             // end date
@@ -141,18 +154,26 @@ class FBSInteractor {
 
             await searchFrame.waitForSelector('div[id="calendarDiv"]', {visible: true});
             
-            const calenderFrameEnd = searchFrame.childFrames().find(f => f.url() == 'https://utownfbs.nus.edu.sg/utown/calendar/calendar.htm');
+            const calenderFrameEnd = searchFrame.childFrames().find((f: Frame) => f.url() == 'https://utownfbs.nus.edu.sg/utown/calendar/calendar.htm');
             if (calenderFrameEnd == null) {
                 throw new ExpectedElementNotFound("Calender Frame not found");
             }
 
-            await calenderFrameEnd.$('select[id="selectMonth"]').then(eh => eh?.select(month_parsed)); // select month 1, 2, 3, 4, 5, ...
+            await calenderFrameEnd.$('select[id="selectMonth"]').then((eh: ElementHandle | null) => eh?.select(month_parsed)); // select month 1, 2, 3, 4, 5, ...
             await calenderFrameEnd.waitForSelector('td[id="day7"]');
 
-            await calenderFrameEnd.$('select[id="selectYear"]').then(eh => eh?.select(year)); // select year 2024, 2025, ...
+            await calenderFrameEnd.$('select[id="selectYear"]').then((eh: ElementHandle | null) => eh?.select(year)); // select year 2024, 2025, ...
             await calenderFrameEnd.waitForSelector('td[id="day7"]');
 
-            (await calenderFrameEnd.$(`::-p-xpath(//table[@class="textfont"]//td[normalize-space(text())="${day_parsed}"])`))?.click(); // select day 1, 2, 3, 4, 5, ...
+            await calenderFrameEnd.evaluate((day) => {
+                const cells = document.querySelectorAll('table.textfont td');
+                for (const cell of cells) {
+                    if (cell.textContent?.trim() === day) {
+                        (cell as HTMLElement).click();
+                        break;
+                    }
+                }
+            }, day_parsed);
             await FBSInteractor.sleep(3000); // wait for end date value to fully load!
 
             await searchFrame.locator('input[name="btnViewAvailability"]').click();
