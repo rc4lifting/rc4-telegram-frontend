@@ -7,16 +7,26 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: Build and Deploy 
+    environment: Build and Deploy
     steps:
       - name: Deploy to DigitalOcean
         uses: appleboy/ssh-action@master
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          UTOWNFBS_USERNAME: ${{ secrets.UTOWNFBS_USERNAME }}
+          UTOWNFBS_PASSWORD: ${{ secrets.UTOWNFBS_PASSWORD }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USERNAME }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: DOCKER_HUB_USERNAME,BOT_TOKEN,API_BASE_URL,UTOWNFBS_USERNAME,UTOWNFBS_PASSWORD
           script: |
             cd /root/rc4-telegram-frontend
             git pull origin docker-deploy
+            echo "BOT_TOKEN=${BOT_TOKEN}" >> .env
+            echo "API_BASE_URL=${API_BASE_URL}" >> .env
+            echo "UTOWNFBS_USERNAME=${UTOWNFBS_USERNAME}" >> .env
+            echo "UTOWNFBS_PASSWORD=${UTOWNFBS_PASSWORD}" >> .env
             docker-compose down
             docker-compose up --build -d
