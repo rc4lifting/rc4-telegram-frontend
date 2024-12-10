@@ -22,11 +22,19 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: DOCKER_HUB_USERNAME,BOT_TOKEN,API_BASE_URL,UTOWNFBS_USERNAME,UTOWNFBS_PASSWORD
           script: |
-            cd /root/rc4-telegram-frontend
-            git pull origin docker-deploy
-            echo "BOT_TOKEN=${BOT_TOKEN}" >> .env
-            echo "API_BASE_URL=${API_BASE_URL}" >> .env
-            echo "UTOWNFBS_USERNAME=${UTOWNFBS_USERNAME}" >> .env
-            echo "UTOWNFBS_PASSWORD=${UTOWNFBS_PASSWORD}" >> .env
-            docker-compose down
-            docker-compose up --build -d
+            cd /root/rc4-telegram-frontend || exit 1
+            git pull origin docker-deploy || exit 1
+            # Create .env file
+            cat > .env << EOL
+            BOT_TOKEN=${BOT_TOKEN}
+            API_BASE_URL=${API_BASE_URL}
+            UTOWNFBS_USERNAME=${UTOWNFBS_USERNAME}
+            UTOWNFBS_PASSWORD=${UTOWNFBS_PASSWORD}
+            EOL
+            docker-compose down || echo "Warning: docker-compose down failed"
+            docker-compose up --build -d || exit 1
+            # Verify container is running
+            sleep 10
+            docker-compose ps | grep "Up" || exit 1
+            # Prune old images
+            docker image prune -f --filter "until=24h"

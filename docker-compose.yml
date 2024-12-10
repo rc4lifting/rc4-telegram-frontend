@@ -9,5 +9,9 @@ services:
       - API_BASE_URL=${API_BASE_URL}
       - UTOWNFBS_USERNAME=${UTOWNFBS_USERNAME}
       - UTOWNFBS_PASSWORD=${UTOWNFBS_PASSWORD}
-    volumes:
-      - ./.env:/usr/src/app/.env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
