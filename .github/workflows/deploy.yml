@@ -16,7 +16,7 @@ jobs:
           username: ${{ secrets.SERVER_USERNAME }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            cd /root/rc4-telegram-bot
+            cd /root/rc4-telegram-frontend
             git pull origin main
             docker-compose down
             docker-compose up --build -d
