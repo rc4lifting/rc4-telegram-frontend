@@ -22,8 +22,5 @@ RUN bun install
 # Copy source code
 COPY . .
 
-# Build TypeScript
-RUN bun run build
-
 # Command to run the app
 CMD ["bun", "src/bot.ts"] 
