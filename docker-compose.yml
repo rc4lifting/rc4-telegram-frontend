@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  bot:
+    image: ${DOCKER_HUB_USERNAME}/rc4-telegram-bot:latest
+    restart: always
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - API_BASE_URL=${API_BASE_URL}
+      - UTOWNFBS_USERNAME=${UTOWNFBS_USERNAME}
+      - UTOWNFBS_PASSWORD=${UTOWNFBS_PASSWORD}
+    volumes:
+      - ./.env:/usr/src/app/.env
