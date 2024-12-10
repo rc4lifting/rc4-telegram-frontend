@@ -22,5 +22,5 @@ RUN bun install
 # Copy source code
 COPY . .
 
-# Command to run the app
-CMD ["bun", "src/bot.ts"] 
+# Modify command to show more verbose output
+CMD ["bun", "--debug", "src/bot.ts"] 
