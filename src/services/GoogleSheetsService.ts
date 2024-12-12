@@ -2,6 +2,7 @@ import { GoogleSpreadsheet, GoogleSpreadsheetWorksheet } from 'google-spreadshee
 import { JWT } from 'google-auth-library';
 import { components } from '../../schema/schema';
 import crypto from 'crypto';
+import { DateTime } from 'luxon';
 
 interface TimeSlot {
   time: string;
@@ -11,12 +12,6 @@ export class GoogleSheetsService {
   private doc: GoogleSpreadsheet;
   private metadataTitle = 'Metadata';
   private summaryTitle = 'Summary';
-
-  private dateFormatter = new Intl.DateTimeFormat('en-SG', {
-    timeZone: 'Asia/Singapore',
-    dateStyle: 'full',
-    timeStyle: 'long',
-  });
 
   constructor(spreadsheetId: string) {
     const email = Bun.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
@@ -89,7 +84,7 @@ export class GoogleSheetsService {
     } else {
       await metadataSheet.loadHeaderRow();
       const requiredHeaders = ['Global Hash', 'Last Updated', 'Venue ID', 'Venue Hash'];
-      if (requiredHeaders.some(h => !metadataSheet.headerValues.includes(h))) {
+      if (requiredHeaders.some(h => !metadataSheet!.headerValues.includes(h))) {
         await metadataSheet.setHeaderRow(requiredHeaders);
       }
     }
@@ -101,7 +96,7 @@ export class GoogleSheetsService {
    */
   private async checkAndUpdateGlobalHash(metadataSheet: GoogleSpreadsheetWorksheet, newHash: string) {
     const rows = await metadataSheet.getRows();
-    const lastUpdated = this.formatDate(new Date());
+    const lastUpdated = this.formatDate(DateTime.now());
 
     // The first data row (if any) is the global hash row
     let globalChanged = false;
@@ -142,12 +137,13 @@ export class GoogleSheetsService {
     let venueRow = venueRows.find(r => r.get('Venue ID') === venue.id?.toString());
     let venueChanged = false;
 
+    const lastUpdated = this.formatDate(DateTime.now());
     if (!venueRow) {
       // Add a new row at the end for this venue
       await metadataSheet.addRow({
         'Venue ID': venue.id?.toString() || '',
         'Venue Hash': newHash,
-        'Last Updated': this.formatDate(new Date())
+        'Last Updated': lastUpdated
       });
       venueChanged = true;
     } else {
@@ -155,7 +151,7 @@ export class GoogleSheetsService {
       if (existingHash !== newHash) {
         // Update the existing row for this specific venue
         venueRow.set('Venue Hash', newHash);
-        venueRow.set('Last Updated', this.formatDate(new Date()));
+        venueRow.set('Last Updated', lastUpdated);
         await venueRow.save();
         venueChanged = true;
       }
@@ -291,15 +287,16 @@ export class GoogleSheetsService {
     dates: string[],
     booking: components["schemas"]["GetBookingRequest"]
   ) {
-    const startDateTime = new Date(booking.start_time);
-    const endDateTime = new Date(booking.end_time);
+    const startDateTime = DateTime.fromISO(booking.start_time, { zone: 'Asia/Singapore' });
+    const endDateTime = DateTime.fromISO(booking.end_time, { zone: 'Asia/Singapore' });
     const bookerName = booking.users?.[0]?.name || 'Unknown';
 
-    const current = new Date(startDateTime);
-    while (current <= endDateTime) {
-      const dateStr = current.toISOString().split('T')[0];
+    let tempCurrent = startDateTime;
+    // Iterate day by day until we pass the endDateTime
+    while (tempCurrent.toMillis() <= endDateTime.toMillis()) {
+      const dateStr = tempCurrent.toISODate()!;
       if (!dates.includes(dateStr)) {
-        current.setDate(current.getDate() + 1);
+        tempCurrent = tempCurrent.plus({ days: 1 });
         continue;
       }
 
@@ -307,15 +304,16 @@ export class GoogleSheetsService {
       for (let i = 0; i < timeSlots.length; i++) {
         const slotStartStr = timeSlots[i].time.split(' - ')[0];
         const [slotHour, slotMin] = slotStartStr.split(':').map(Number);
-        const slotTime = new Date(dateStr);
-        slotTime.setHours(slotHour, slotMin, 0, 0);
 
-        if (slotTime >= startDateTime && slotTime < endDateTime) {
+        let slotTime = DateTime.fromISO(dateStr, { zone: 'Asia/Singapore' });
+        slotTime = slotTime.set({ hour: slotHour, minute: slotMin });
+
+        if (slotTime.toMillis() >= startDateTime.toMillis() && slotTime.toMillis() < endDateTime.toMillis()) {
           rows[i][dateColumn] = bookerName;
         }
       }
 
-      current.setDate(current.getDate() + 1);
+      tempCurrent = tempCurrent.plus({ days: 1 });
     }
   }
 
@@ -362,29 +360,31 @@ export class GoogleSheetsService {
    * Generate a list of ISO date strings for 'days' days from now.
    */
   private generateDates(days: number): string[] {
-    const today = new Date();
+    const today = DateTime.now().setZone('Asia/Singapore').startOf('day');
     const dates: string[] = [];
     for (let i = 0; i < days; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
-      dates.push(d.toISOString().split('T')[0]);
+      const d = today.plus({ days: i });
+      const isoDate = d.toISODate();
+      if (isoDate) {
+        dates.push(isoDate);
+      }
     }
     return dates;
   }
 
   /**
-   * Format date headers as dd/mm/yyyy
+   * Format date headers as dd/mm/yyyy using luxon
    */
   private formatDateHeader(dateStr: string): string {
-    const [year, month, day] = dateStr.split('-');
-    return `${day}/${month}/${year}`;
+    const dt = DateTime.fromISO(dateStr, { zone: 'Asia/Singapore' });
+    return dt.toFormat('dd/MM/yyyy');
   }
 
   /**
-   * Format date to GMT+8 friendly string
+   * Format date/time in a full, localized manner
    */
-  private formatDate(date: Date): string {
-    return this.dateFormatter.format(date);
+  private formatDate(dt: DateTime): string {
+    return dt.setZone('Asia/Singapore').toLocaleString(DateTime.DATETIME_FULL_WITH_SECONDS);
   }
 
   private padTime(hour: number, minute: number): string {

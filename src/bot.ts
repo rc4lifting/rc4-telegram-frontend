@@ -2,14 +2,17 @@ import { Telegraf, Context, Markup } from "telegraf";
 import { session } from "telegraf";
 import axios, { AxiosRequestConfig, AxiosError } from "axios";
 import { components, operations } from "../schema/schema.d";
+import { GoogleSheetsService } from "./services/GoogleSheetsService";
+import { updateVenueDataInSheets } from "./services/VenueDataService";
+import { DateTime } from "luxon";
 
 export type BookingStep = "start_date" | "start_time" | "end_date" | "end_time" | "confirm";
 
 export interface SessionData {
   currentBooking?: {
     step: BookingStep;
-    startDate?: string;
-    startTime?: string;
+    startDate?: string;   // ISO date string (date only or full date/time)
+    startTime?: string;   // Time in HH:mm format
     endDate?: string;
     endTime?: string;
     startOffset?: number;
@@ -25,10 +28,19 @@ export interface SessionContext extends Context {
 
 export interface CalendarBookingData {
   venue_id: number;
-  start_date: string;
-  start_time: string;
-  end_date: string;
-  end_time: string;
+  start_date: string; // ISO date (yyyy-mm-dd)
+  start_time: string; // HH:mm
+  end_date: string;   // ISO date (yyyy-mm-dd)
+  end_time: string;   // HH:mm
+}
+
+interface BookingCalendarOptions {
+  dateRangeDays?: number;
+  maxWeeks?: number;
+  timeStepMinutes?: number;
+  startHour?: number;
+  endHour?: number;
+  timezone?: string;
 }
 
 export class BookingCalendar {
@@ -38,17 +50,12 @@ export class BookingCalendar {
   timeStepMinutes: number;
   startHour: number;
   endHour: number;
+  private timezone: string;
   private onBookingDataReady?: (bookingData: CalendarBookingData, ctx: SessionContext) => Promise<void>;
 
   constructor(
     bot: Telegraf<SessionContext>, 
-    options?: {
-      dateRangeDays?: number;
-      maxWeeks?: number;
-      timeStepMinutes?: number;
-      startHour?: number;
-      endHour?: number;
-    },
+    options?: BookingCalendarOptions,
     onBookingDataReady?: (bookingData: CalendarBookingData, ctx: SessionContext) => Promise<void>
   ) {
     this.bot = bot;
@@ -57,6 +64,7 @@ export class BookingCalendar {
     this.timeStepMinutes = options?.timeStepMinutes || 30;
     this.startHour = options?.startHour || 8;
     this.endHour = options?.endHour || 20;
+    this.timezone = options?.timezone || 'Asia/Singapore';
     this.onBookingDataReady = onBookingDataReady;
   }
 
@@ -78,7 +86,6 @@ export class BookingCalendar {
   async handleCallbackQuery(ctx: SessionContext) {
     const data = (ctx.callbackQuery as any).data;
     if (!data || !ctx.session.currentBooking) return;
-
     const state = ctx.session.currentBooking;
 
     // Navigation for start date
@@ -115,7 +122,8 @@ export class BookingCalendar {
       case "start_date":
         if (data.startsWith("start_date_")) {
           const dateISO = data.replace("start_date_", "");
-          await ctx.answerCbQuery(`Selected start date: ${this.formatDate(new Date(dateISO))}`);
+          const dateObj = DateTime.fromISO(dateISO, { zone: this.timezone });
+          await ctx.answerCbQuery(`Selected start date: ${this.formatDate(dateObj)}`);
           state.startDate = dateISO;
           state.step = "start_time";
           await this.renderStartTimeSelection(ctx, dateISO);
@@ -127,16 +135,19 @@ export class BookingCalendar {
           const startTime = data.replace("start_time_", "");
           await ctx.answerCbQuery(`Selected start time: ${startTime}`);
           state.startTime = startTime;
-          state.step = "end_date";
-          state.endOffset = 0;
-          await this.renderEndDateSelection(ctx, 0);
+          // Automatically set end date to start date
+          state.endDate = state.startDate;
+          state.step = "end_time";
+          // Skip end date selection and go straight to end time
+          await this.renderEndTimeSelection(ctx, state.startDate!, state.startTime!, state.endDate!);
         }
         break;
 
       case "end_date":
         if (data.startsWith("end_date_")) {
           const dateISO = data.replace("end_date_", "");
-          await ctx.answerCbQuery(`Selected end date: ${this.formatDate(new Date(dateISO))}`);
+          const dateObj = DateTime.fromISO(dateISO, { zone: this.timezone });
+          await ctx.answerCbQuery(`Selected end date: ${this.formatDate(dateObj)}`);
           state.endDate = dateISO;
           state.step = "end_time";
           await this.renderEndTimeSelection(ctx, state.startDate!, state.startTime!, dateISO);
@@ -144,6 +155,12 @@ export class BookingCalendar {
         break;
 
       case "end_time":
+        if (data === "change_end_date") {
+          await ctx.answerCbQuery("Change end date");
+          state.step = "end_date";
+          state.endOffset = 0;
+          await this.renderEndDateSelection(ctx, 0);
+        }
         if (data.startsWith("end_time_")) {
           const endTime = data.replace("end_time_", "");
           await ctx.answerCbQuery(`Selected end time: ${endTime}`);
@@ -183,35 +200,67 @@ export class BookingCalendar {
   }
 
   private async renderStartTimeSelection(ctx: SessionContext, dateISO: string) {
-    const date = new Date(dateISO);
-    const now = new Date();
-    const slots = this.generateTimeSlots(date, now, true);
-    if (slots.length === 0) {
-      try {
-        await ctx.editMessageText("No available start times for the selected date. Please pick a different start date.");
-      } catch {
-        await ctx.reply("No available start times for the selected date. Please pick a different start date.");
-      }
-      ctx.session.currentBooking!.step = "start_date"; 
-      return;
-    }
-    const buttons = slots.map(slot => Markup.button.callback(slot, `start_time_${slot}`));
-    const markup = {
-      inline_keyboard: [
-        ...this.chunkButtons(buttons, 4),
-        [Markup.button.callback("❌ Cancel", "cancel_booking")]
-      ]
-    };
     try {
-      await ctx.editMessageText(
-        `Start Date: ${this.formatDate(date)}\n\nSelect a *start time*:`,
-        { parse_mode: "Markdown", reply_markup: markup }
+      const date = DateTime.fromISO(dateISO, { zone: this.timezone });
+      const now = DateTime.local().setZone(this.timezone);
+
+      // Fetch existing bookings
+      const response = await apiRequest(
+        "get_bookings_telegram_booking__get",
+        "/telegram/booking/",
+        ctx,
+        null,
+        {
+          venueId: ctx.session.currentBooking?.venue_id,
+          page: 1,
+          size: 50
+        }
       );
-    } catch {
-      await ctx.reply(
-        `Start Date: ${this.formatDate(date)}\n\nSelect a *start time*:`,
-        { parse_mode: "Markdown", reply_markup: markup }
-      );
+
+      const existingBookings = response.items as components["schemas"]["GetBookingRequest"][];
+      const slots = await this.generateTimeSlots(date, now, true, undefined, existingBookings);
+
+      if (slots.length === 0) {
+        const message = date < now 
+          ? "Cannot book slots in the past. Please select a future date."
+          : "All slots are booked for this date. Please select another date.";
+
+        try {
+          await ctx.editMessageText(message);
+        } catch {
+          await ctx.reply(message);
+        }
+        ctx.session.currentBooking!.step = "start_date"; 
+        return;
+      }
+
+      const buttons = slots.map(slot => Markup.button.callback(slot, `start_time_${slot}`));
+      const markup = {
+        inline_keyboard: [
+          ...this.chunkButtons(buttons, 4),
+          [Markup.button.callback("❌ Cancel", "cancel_booking")]
+        ]
+      };
+
+      const messageText = 
+        `Start Date: ${this.formatDate(date)}\n\n` +
+        `Select a *start time*:\n` +
+        `_(${slots.length} slots available)_`;
+
+      try {
+        await ctx.editMessageText(messageText, { 
+          parse_mode: "Markdown", 
+          reply_markup: markup 
+        });
+      } catch {
+        await ctx.reply(messageText, { 
+          parse_mode: "Markdown", 
+          reply_markup: markup 
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching bookings:', error);
+      await ctx.reply("Error checking availability. Please try again later.");
     }
   }
 
@@ -225,54 +274,80 @@ export class BookingCalendar {
   }
 
   private async renderEndTimeSelection(ctx: SessionContext, startDateISO: string, startTime: string, endDateISO: string) {
-    const startDate = new Date(startDateISO);
-    const endDate = new Date(endDateISO);
-
-    const [startHour, startMin] = startTime.split(":").map(Number);
-    const startDateTime = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), startHour, startMin);
-
-    const now = new Date();
-    let slots: string[];
-    if (this.isSameDay(startDate, endDate)) {
-      slots = this.generateTimeSlots(endDate, now, false, startDateTime);
-    } else {
-      slots = this.generateTimeSlots(endDate, now, true);
-    }
-
-    if (slots.length === 0) {
-      try {
-        await ctx.editMessageText("No end times available for the selected date. Please pick a different end date.");
-      } catch {
-        await ctx.reply("No end times available for the selected date. Please pick a different end date.");
-      }
-      ctx.session.currentBooking!.step = "end_date"; 
-      return;
-    }
-
-    const buttons = slots.map(slot => Markup.button.callback(slot, `end_time_${slot}`));
-    const markup = {
-      inline_keyboard: [
-        ...this.chunkButtons(buttons, 4),
-        [Markup.button.callback("❌ Cancel", "cancel_booking")]
-      ]
-    };
-
     try {
-      await ctx.editMessageText(
-        `Start: ${this.formatDateTime(startDateISO, startTime)}\nEnd Date: ${this.formatDate(endDate)}\n\nSelect an *end time*:`,
-        { parse_mode: "Markdown", reply_markup: markup }
+      const startDate = DateTime.fromISO(startDateISO, { zone: this.timezone });
+      const endDate = DateTime.fromISO(endDateISO, { zone: this.timezone });
+
+      const [startHour, startMin] = startTime.split(":").map(Number);
+      const startDateTime = startDate.set({ hour: startHour, minute: startMin });
+      
+      const response = await apiRequest(
+        "get_bookings_telegram_booking__get",
+        "/telegram/booking/",
+        ctx,
+        null,
+        {
+          venueId: ctx.session.currentBooking?.venue_id,
+          page: 1,
+          size: 50
+        }
       );
-    } catch {
-      await ctx.reply(
-        `Start: ${this.formatDateTime(startDateISO, startTime)}\nEnd Date: ${this.formatDate(endDate)}\n\nSelect an *end time*:`,
-        { parse_mode: "Markdown", reply_markup: markup }
-      );
+
+      const existingBookings = response.items as components["schemas"]["GetBookingRequest"][];
+      const now = DateTime.local().setZone(this.timezone);
+      let slots: string[];
+
+      if (startDate.hasSame(endDate, 'day')) {
+        // Same day: end times must be after startDateTime
+        slots = await this.generateTimeSlots(endDate, now, false, startDateTime, existingBookings);
+      } else {
+        // Different day: we can pick any slot after now (or future)
+        slots = await this.generateTimeSlots(endDate, now, true, undefined, existingBookings);
+      }
+
+      if (slots.length === 0) {
+        try {
+          await ctx.editMessageText("No end times available for the selected date. Please pick a different end date.");
+        } catch {
+          await ctx.reply("No end times available for the selected date. Please pick a different end date.");
+        }
+        ctx.session.currentBooking!.step = "end_date"; 
+        return;
+      }
+
+      const buttons = slots.map(slot => Markup.button.callback(slot, `end_time_${slot}`));
+      const changeDateButton = Markup.button.callback("📅 Change End Date", "change_end_date");
+      const markup = {
+        inline_keyboard: [
+          ...this.chunkButtons(buttons, 4),
+          [changeDateButton],
+          [Markup.button.callback("❌ Cancel", "cancel_booking")]
+        ]
+      };
+
+      try {
+        await ctx.editMessageText(
+          `Start: ${this.formatDateTime(startDate, startTime)}\nEnd Date: ${this.formatDate(endDate)}\n\nSelect an *end time*:`,
+          { parse_mode: "Markdown", reply_markup: markup }
+        );
+      } catch {
+        await ctx.reply(
+          `Start: ${this.formatDateTime(startDate, startTime)}\nEnd Date: ${this.formatDate(endDate)}\n\nSelect an *end time*:`,
+          { parse_mode: "Markdown", reply_markup: markup }
+        );
+      }
+    } catch (error) {
+      console.error('Error fetching bookings:', error);
+      await ctx.reply("Error checking availability. Please try again later.");
     }
   }
 
   private async renderConfirmation(ctx: SessionContext, startDateISO: string, startTime: string, endDateISO: string, endTime: string) {
-    const startStr = this.formatDateTime(startDateISO, startTime);
-    const endStr = this.formatDateTime(endDateISO, endTime);
+    const startDate = DateTime.fromISO(startDateISO, { zone: this.timezone });
+    const endDate = DateTime.fromISO(endDateISO, { zone: this.timezone });
+
+    const startStr = this.formatDateTime(startDate, startTime);
+    const endStr = this.formatDateTime(endDate, endTime);
     const markup = {
       inline_keyboard: [
         [Markup.button.callback("✅ Confirm", "confirm_booking"), 
@@ -294,13 +369,14 @@ export class BookingCalendar {
   }
 
   private buildDateKeyboard(prefix: string, navPrefix: string, offset: number) {
-    const now = new Date();
-    now.setHours(0,0,0,0);
+    const now = DateTime.local().setZone(this.timezone).startOf('day');
     const buttons: any[] = [];
     for (let i = 0; i < this.dateRangeDays; i++) {
-      const day = new Date(now.getTime() + (i + offset * this.dateRangeDays) * 24*60*60*1000);
+      const day = now.plus({ days: i + offset * this.dateRangeDays });
       const label = this.formatShortDate(day);
-      buttons.push(Markup.button.callback(label, `${prefix}${day.toISOString()}`));
+      // Storing just the date in ISO format (yyyy-mm-dd)
+      const isoDate = day.toISODate(); 
+      buttons.push(Markup.button.callback(label, `${prefix}${isoDate}`));
     }
 
     const navRow = [];
@@ -320,20 +396,68 @@ export class BookingCalendar {
     return Markup.inlineKeyboard(keyboard).reply_markup;
   }
 
-  private generateTimeSlots(date: Date, now: Date, isStartTime: boolean, startDateTime?: Date): string[] {
+  private async generateTimeSlots(
+    date: DateTime,
+    now: DateTime,
+    isStartTime: boolean,
+    startDateTime?: DateTime,
+    existingBookings?: components["schemas"]["GetBookingRequest"][]
+  ): Promise<string[]> {
     const slots: string[] = [];
+    // We consider the day in the given timezone
+    const targetDate = date.startOf('day');
+
     for (let hour = this.startHour; hour <= this.endHour; hour++) {
       for (let min = 0; min < 60; min += this.timeStepMinutes) {
-        const slotDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, min);
+        const slotDate = targetDate.set({ hour, minute: min });
+
+        // Check if booked
+        const isBooked = existingBookings?.some(booking => {
+          const tzBookingStart = DateTime.fromISO(booking.start_time, { zone: this.timezone });
+          const tzBookingEnd = DateTime.fromISO(booking.end_time, { zone: this.timezone });
+          return slotDate >= tzBookingStart && slotDate < tzBookingEnd;
+        });
+        if (isBooked) continue;
+
+        if (!isStartTime) {
+          // Find the earliest booking start time after startDateTime
+          let earliestNextBookingStart: DateTime | null = null;
+          if (existingBookings && startDateTime) {
+            for (const booking of existingBookings) {
+              const tzBookingStart = DateTime.fromISO(booking.start_time, { zone: this.timezone });
+              if (tzBookingStart > startDateTime) {
+                if (!earliestNextBookingStart || tzBookingStart < earliestNextBookingStart) {
+                  earliestNextBookingStart = tzBookingStart;
+                }
+              }
+            }
+          }
+
+          // Don't allow end times that would overlap with next booking
+          if (earliestNextBookingStart && slotDate >= earliestNextBookingStart) {
+            break;
+          }
+
+          // Ensure end time is after start time on same day
+          if (startDateTime && slotDate <= startDateTime) continue;
+        }
+
         if (isStartTime) {
+          // For start times, slot must be in the future
           if (slotDate > now) {
             slots.push(this.formatTime(slotDate));
           }
         } else {
-          if (startDateTime && slotDate > startDateTime) {
-            slots.push(this.formatTime(slotDate));
-          } else if (!startDateTime && slotDate > now) {
-            slots.push(this.formatTime(slotDate));
+          // For end times, must be after the startDateTime if same day
+          if (startDateTime) {
+            if (slotDate > startDateTime) {
+              slots.push(this.formatTime(slotDate));
+            }
+          } else {
+            // If no startDateTime (different day scenario), just ensure it's after now
+            if (slotDate > now) {
+              slots.push(this.formatTime(slotDate));
+            }
           }
         }
       }
@@ -361,29 +485,24 @@ export class BookingCalendar {
     return result;
   }
 
-  private formatDate(date: Date): string {
-    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', weekday: 'short', year: 'numeric' };
-    return date.toLocaleDateString('en-US', options);
+  private formatDate(date: DateTime): string {
+    // Example: Mon, Sep 13, 2024
+    return date.toLocaleString({ weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
   }
 
-  private formatShortDate(date: Date): string {
-    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
-    return date.toLocaleDateString('en-US', options);
+  private formatShortDate(date: DateTime): string {
+    // Example: Sep 13
+    return date.toLocaleString({ month: 'short', day: 'numeric' });
   }
 
-  private formatTime(date: Date): string {
-    const hour = String(date.getHours()).padStart(2,'0');
-    const min = String(date.getMinutes()).padStart(2,'0');
-    return `${hour}:${min}`;
+  private formatTime(date: DateTime): string {
+    // 24-hour HH:mm
+    return date.toFormat('HH:mm');
   }
 
-  private formatDateTime(dateISO: string, time: string): string {
-    const date = new Date(dateISO);
+  private formatDateTime(date: DateTime, time: string): string {
+    // Combine date and time strings for display
     return `${this.formatDate(date)} ${time}`;
-  }
-
-  private isSameDay(d1: Date, d2: Date): boolean {
-    return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
   }
 }
 
@@ -395,7 +514,8 @@ bot.use(session({
     booking: undefined
   })
 }));
-const API_BASE_URL = Bun.env.API_BASE_URL || "http://54.255.252.24:8000";
+const API_BASE_URL = Bun.env.API_BASE_URL || "";
+const TIMEZONE = process.env.TIMEZONE || 'Asia/Singapore';
 
 // Initialize calendar with validation and booking logic
 const calendar = new BookingCalendar(
@@ -404,32 +524,40 @@ const calendar = new BookingCalendar(
     dateRangeDays: 14,
     timeStepMinutes: 30,
     startHour: 8,
-    endHour: 20
+    endHour: 20,
+    timezone: TIMEZONE
   },
   async (bookingData: CalendarBookingData, ctx: SessionContext) => {
     try {
-      const startDateTime = new Date(`${bookingData.start_date}T${bookingData.start_time}`);
-      const endDateTime = new Date(`${bookingData.end_date}T${bookingData.end_time}`);
+      // Convert the date and time strings to DateTime objects in the local timezone first
+      const startDate = DateTime.fromISO(bookingData.start_date, { zone: TIMEZONE });
+      const endDate = DateTime.fromISO(bookingData.end_date, { zone: TIMEZONE });
       
-      if (endDateTime <= startDateTime) {
-        try {
-          await ctx.editMessageText(
-            "❌ End time must be after start time. Please try again.",
-            { parse_mode: "Markdown" }
-          );
-        } catch {
-          await ctx.reply(
-            "❌ End time must be after start time. Please try again.",
-            { parse_mode: "Markdown" }
-          );
-        }
+      // Parse the time strings
+      const [startHour, startMin] = bookingData.start_time.split(':').map(Number);
+      const [endHour, endMin] = bookingData.end_time.split(':').map(Number);
+      
+      // Create full DateTime objects with the correct date and time
+      const startDT = startDate.set({ hour: startHour, minute: startMin });
+      const endDT = endDate.set({ hour: endHour, minute: endMin });
+      
+      // Get current time in the correct timezone
+      const now = DateTime.now().setZone(TIMEZONE);
+      
+      if (endDT <= startDT) {
+        await ctx.reply("❌ End time must be after start time. Please try again.");
+        return;
+      }
+
+      if (endDT <= now) {
+        await ctx.reply("❌ End time must be in the future. Please try again.");
         return;
       }
 
       const booking: components["schemas"]["CreateBookingRequest"] = {
         venue_id: bookingData.venue_id,
-        start_time: `${bookingData.start_date.split('T')[0]} ${bookingData.start_time}:00`,
-        end_time: `${bookingData.end_date.split('T')[0]} ${bookingData.end_time}:00`,
+        start_time: startDT.toUTC().toISO()!,
+        end_time: endDT.toUTC().toISO()!,
         users: ctx.from?.username ? [ctx.from.username] : [],
         desc: `Venue booking by ${ctx.from?.username || 'Unknown user'}`
       };
@@ -439,12 +567,43 @@ const calendar = new BookingCalendar(
         end_time: booking.end_time
       });
 
-      await apiRequest(
-        "add_booking_telegram_booking__post",
-        "/telegram/booking/",
-        ctx,
-        booking
-      );
+      try {
+        await apiRequest(
+          "add_booking_telegram_booking__post",
+          "/telegram/booking/",
+          ctx,
+          booking
+        );
+      } catch (error: any) {
+        // Improved error message extraction
+        let errorMessage = "Unknown error occurred";
+        if (axios.isAxiosError(error)) {
+          const responseData = error.response?.data;
+          if (responseData) {
+            if (typeof responseData === 'string') {
+              errorMessage = responseData;
+            } else if (typeof responseData === 'object') {
+              errorMessage = responseData.detail || 
+                           responseData.message || 
+                           responseData.error ||
+                           (Array.isArray(responseData) ? responseData[0] : null) ||
+                           JSON.stringify(responseData);
+            }
+          }
+        } else if (error instanceof Error) {
+          errorMessage = error.message;
+        }
+
+        const userMessage = `❌ Booking failed: ${errorMessage}\n\nPlease try again or contact support if the issue persists.`;
+        
+        try {
+          await ctx.editMessageText(userMessage, { parse_mode: "Markdown" });
+        } catch {
+          await ctx.reply(userMessage, { parse_mode: "Markdown" });
+        }
+        delete ctx.session.currentBooking;
+        return;
+      }
 
       // Get venue details
       const venueResponse = await apiRequest(
@@ -456,14 +615,32 @@ const calendar = new BookingCalendar(
       const venue = venues.find(v => v.id === booking.venue_id);
       const venueName = venue ? venue.name : "Unknown venue";
 
+      const formattedStart = startDT.toLocaleString({
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      });
+
+      const formattedEnd = endDT.toLocaleString({
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      });
+
       try {
         await ctx.editMessageText(
           `✅ Booking created successfully!\n\n` +
           `🔖 *Booking Summary:*\n` +
           `🏢 *Venue:* ${venueName}\n` +
           `📝 *Description:* ${booking.desc}\n` +
-          `🕒 *Start:* ${booking.start_time}\n` +
-          `🕕 *End:* ${booking.end_time}\n` +
+          `🕒 *Start:* ${formattedStart}\n` +
+          `🕕 *End:* ${formattedEnd}\n` +
           `👤 *User:* ${ctx.from?.username || "Unknown"}`,
           { parse_mode: "Markdown" }
         );
@@ -473,8 +650,8 @@ const calendar = new BookingCalendar(
           `🔖 *Booking Summary:*\n` +
           `🏢 *Venue:* ${venueName}\n` +
           `📝 *Description:* ${booking.desc}\n` +
-          `🕒 *Start:* ${booking.start_time}\n` +
-          `🕕 *End:* ${booking.end_time}\n` +
+          `🕒 *Start:* ${formattedStart}\n` +
+          `🕕 *End:* ${formattedEnd}\n` +
           `👤 *User:* ${ctx.from?.username || "Unknown"}`,
           { parse_mode: "Markdown" }
         );
@@ -484,15 +661,21 @@ const calendar = new BookingCalendar(
 
     } catch (error) {
       console.error('Booking creation error:', error);
+      let errorMessage = "An unexpected error occurred";
+      
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      
       try {
         await ctx.editMessageText(
-          "❌ Error creating booking. Please try again later.\n\n" +
+          `❌ Error creating booking: ${errorMessage}\n\n` +
           "If the problem persists, contact support.",
           { parse_mode: "Markdown" }
         );
       } catch {
         await ctx.reply(
-          "❌ Error creating booking. Please try again later.\n\n" +
+          `❌ Error creating booking: ${errorMessage}\n\n` +
           "If the problem persists, contact support.",
           { parse_mode: "Markdown" }
         );
@@ -509,7 +692,8 @@ async function apiRequest<T extends keyof operations>(
   data?: any,
   params?: any
 ): Promise<any> {
-  const url = `${API_BASE_URL}${path}`;
+  const baseUrl = API_BASE_URL.replace(/\/$/, '');
+  const url = `${baseUrl}${path}`;
   const headers = {
     "Content-Type": "application/json",
     AccessToken: Bun.env.BOT_TOKEN || "",
@@ -553,15 +737,15 @@ async function apiRequest<T extends keyof operations>(
       console.error(`Request Method: ${method}`);
       console.error(`Request Headers:`, JSON.stringify(headers, null, 2));
       console.error(`Response Status: ${axiosError.response?.status}`);
-      console.error(
-        `Response Data: ${JSON.stringify(axiosError.response?.data)}`
-      );
+      console.error(`Response Data: ${JSON.stringify(axiosError.response?.data)}`);
     } else {
       console.error(`Non-Axios Error: ${error}`);
     }
     throw error;
   }
 }
+
+// Bot commands and handlers remain largely the same, just ensure they work with the new date handling
 
 // Start command
 bot.start((ctx) =>
@@ -582,14 +766,15 @@ bot.help((ctx) =>
       "🔍 /getbooking <id> - Get a specific booking\n" +
       "🗑 /deletebooking <id> - Delete a specific booking\n" +
       "🏢 /allvenues - List all venues\n" +
-      "🔎 /getvenue <id> - Get a specific venue",
+      "🔎 /getvenue <id> - Get a specific venue\n" +
+      "📑 /updatesheets - Update Google Sheets with venue data",
     { parse_mode: "Markdown" }
   )
 );
 
 function getVenueEmoji(venueName: string): string {
   const emojiMap: { [key: string]: string } = {
-    SR1: "🏫",
+    SR1: "🏢",
     SR2: "🏫",
     SR3: "🏫",
     SR4: "🏫",
@@ -661,14 +846,25 @@ bot.action(/^book_venue_(\d+)$/, async (ctx) => {
         booking: undefined
       };
     }
+    
     try {
-      // Delete the original message with venue selection
-      if (ctx.callbackQuery.message) {
-        await ctx.deleteMessage();
-      }
+      const response = await apiRequest(
+        "get_venues_telegram_venue__get",
+        "/telegram/venue/",
+        ctx
+      );
+      const venues = response.items as components["schemas"]["Venue"][];
+      const selectedVenue = venues.find(v => v.id === venueId);
+      const venueName = selectedVenue ? selectedVenue.name : "Selected venue";
+
+      await ctx.editMessageText(
+        `📍 Selected venue: *${venueName}*\n\nPlease select a booking date:`,
+        { parse_mode: "Markdown" }
+      );
     } catch (error) {
-      console.error("Error deleting message:", error);
+      console.error("Error editing message:", error);
     }
+    
     await calendar.startBookingFlow(ctx, venueId);
   } else {
     await ctx.answerCbQuery("Invalid venue selection");
@@ -679,7 +875,6 @@ bot.action(/^book_venue_(\d+)$/, async (ctx) => {
 // My bookings command
 bot.command("mybookings", async (ctx) => {
   console.log("mybookings command called");
-
   try {
     const response = await apiRequest(
       "get_bookings_telegram_booking__get",
@@ -734,7 +929,7 @@ bot.command("profile", async (ctx) => {
       ctx
     );
     ctx.reply(
-      `👤 *Your profile:*\n📛 *Name:* ${profile.name}\n🆔 *NUS Net ID:* ${
+      `👤 *Your profile:*\n🆔 *NUS Net ID:* ${
         profile.nus_net_id
       }\n🚪 *Room:* ${profile.room_number}\n🎭 *Roles:* ${profile.roles.join(
         ", "
@@ -880,7 +1075,39 @@ bot.catch((err, ctx) => {
   throw err;
 });
 
-// Launch the bot after all handlers are set
+// Update sheets command
+bot.command("updatesheets", async (ctx) => {
+  try {
+    await ctx.reply("🔄 Starting venue data update...");
+    
+    const result = await updateVenueDataInSheets(ctx);
+    
+    if (!result.success) {
+      await ctx.reply(
+        "ℹ️ No updates needed - data unchanged since last update",
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+    
+    await ctx.reply(
+      `✅ Successfully updated Google Sheets!\n\n` +
+      `📊 *Summary:*\n` +
+      `• Venues processed: ${result.venuesCount}\n` +
+      `• Bookings processed: ${result.bookingsCount}\n\n` +
+      `🔗 Sheet URL: ${process.env.GOOGLE_SHEETS_URL || "Not configured"}`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (error) {
+    console.error("Error in updatesheets command:", error);
+    await ctx.reply(
+      "❌ Failed to update Google Sheets. Please check the logs or contact support.",
+      { parse_mode: "Markdown" }
+    );
+  }
+});
+
+// Launch the bot
 bot.launch().catch((err) => {
   console.error("Error launching bot:", err);
   process.exit(1);
