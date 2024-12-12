@@ -1219,6 +1219,12 @@ bot.command("updatesheets", async (ctx) => {
   }
 });
 
+bot.on('callback_query', async (ctx) => {
+  if (ctx.callbackQuery && 'data' in ctx.callbackQuery) {
+    await calendar.handleCallbackQuery(ctx);
+  }
+});
+
 // Launch the bot
 bot.launch().catch((err) => {
   console.error("Error launching bot:", err);
