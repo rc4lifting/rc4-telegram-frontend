@@ -373,11 +373,11 @@ export class GoogleSheetsService {
   }
 
   /**
-   * Format date headers as dd/mm/yyyy using luxon
+   * Format date headers as "Day dd/mm/yyyy" using luxon
    */
   private formatDateHeader(dateStr: string): string {
     const dt = DateTime.fromISO(dateStr, { zone: 'Asia/Singapore' });
-    return dt.toFormat('dd/MM/yyyy');
+    return dt.toFormat('ccc dd/MM/yyyy');
   }
 
   /**
