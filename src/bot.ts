@@ -875,6 +875,44 @@ bot.action(/^book_venue_(\d+)$/, async (ctx) => {
 // My bookings command
 bot.command("mybookings", async (ctx) => {
   console.log("mybookings command called");
+  await showBookings(ctx, 1);
+});
+
+// Add this new action handler for pagination buttons
+bot.action(/^bookings_page_(\d+)$/, async (ctx) => {
+  const page = parseInt(ctx.match[1]);
+  await ctx.answerCbQuery();
+  await showBookings(ctx, page);
+});
+
+// Add a new action handler for deleting a booking from the mybookings list
+bot.action(/^delete_booking_(\d+)_(\d+)$/, async (ctx) => {
+  console.log("delete_booking_action called");
+  // Matches pattern: delete_booking_<bookingId>_<page>
+  const bookingId = parseInt(ctx.match[1]);
+  const page = parseInt(ctx.match[2]);
+  try {
+    await ctx.answerCbQuery("Deleting booking...");
+    await apiRequest(
+      "delete_booking_telegram_booking_deleteBooking_delete",
+      `/telegram/booking/deleteBooking`,
+      ctx,
+      null,
+      { bookingId: bookingId.toString() }
+    );
+    await ctx.answerCbQuery("Booking deleted successfully!");
+    // Refresh the booking list after deletion
+    await showBookings(ctx, page, true); // pass an indicator to re-edit the message
+  } catch (error) {
+    console.error("Error deleting booking:", error);
+    await ctx.answerCbQuery("Error deleting booking. Please try again.");
+  }
+});
+
+// Helper function to show bookings with pagination and delete buttons
+async function showBookings(ctx: SessionContext, page: number, isRefresh = false) {
+  const PAGE_SIZE = 5; // Number of bookings per page
+  
   try {
     const response = await apiRequest(
       "get_bookings_telegram_booking__get",
@@ -882,28 +920,109 @@ bot.command("mybookings", async (ctx) => {
       ctx,
       null,
       {
-        page: 1,
-        size: 50,
+        page: page,
+        size: PAGE_SIZE,
       }
     );
 
     if (!response.items || response.items.length === 0) {
-      ctx.reply("You have no bookings.");
-    } else {
-      const bookingList = response.items
-        .map((booking: any) => {
-          return `🔖 *Booking ID:* ${booking.created_at}\n🏢 *Venue:* ${booking.venue_id}\n📝 *Description:* ${booking.desc}\n🕒 *Start:* ${booking.start_time}\n🕕 *End:* ${booking.end_time}`;
-        })
-        .join("\n\n");
-      ctx.reply(`*Your bookings:*\n\n${bookingList}`, {
+      const message = "You have no bookings.";
+      if (ctx.callbackQuery && isRefresh) {
+        await ctx.editMessageText(message);
+      } else {
+        await ctx.reply(message);
+      }
+      return;
+    }
+
+    const totalPages = Math.ceil(response.total / PAGE_SIZE);
+    
+    // We'll need to build inline keyboards for each booking with a Delete button
+    const bookingLines = [];
+    
+    // Fetch venues once for all bookings to reduce API calls
+    const venueResponse = await apiRequest(
+      "get_venues_telegram_venue__get",
+      "/telegram/venue/",
+      ctx
+    );
+    const allVenues = venueResponse.items as components["schemas"]["Venue"][];
+
+    for (let i = 0; i < response.items.length; i++) {
+      const booking = response.items[i];
+      const startTime = DateTime.fromISO(booking.start_time).setZone(TIMEZONE)
+        .toLocaleString(DateTime.DATETIME_SHORT);
+      const endTime = DateTime.fromISO(booking.end_time).setZone(TIMEZONE)
+        .toLocaleString(DateTime.DATETIME_SHORT);
+
+      const venue = allVenues.find(v => v.id === booking.venue_id);
+      const venueName = venue ? venue.name : `Unknown (ID: ${booking.venue_id})`;
+
+      bookingLines.push(
+        `📌 *Booking ${(page - 1) * PAGE_SIZE + i + 1}*\n` +
+        `🏢 *Venue:* ${venueName}\n` +
+        `📝 *Description:* ${booking.desc}\n` +
+        `🕒 *Start:* ${startTime}\n` +
+        `🕕 *End:* ${endTime}`
+      );
+    }
+
+    const formattedBookings = bookingLines.join("\n\n");
+    
+    // Create pagination buttons
+    const navigationRow = [];
+    if (page > 1) {
+      navigationRow.push(Markup.button.callback('⬅️ Previous', `bookings_page_${page - 1}`));
+    }
+    if (page < totalPages) {
+      navigationRow.push(Markup.button.callback('Next ➡️', `bookings_page_${page + 1}`));
+    }
+
+    const keyboardRows: Array<Array<ReturnType<typeof Markup.button.callback>>> = [];
+
+    // For each booking, add a delete button row
+    response.items.forEach((booking: any) => {
+      // Ensure booking.id exists and is valid
+      if (booking && booking.id) {
+        keyboardRows.push([
+          Markup.button.callback(
+            "🗑 Delete", 
+            `delete_booking_${booking.id}_${page}`
+          )
+        ]);
+      }
+    });
+
+    // Add pagination row if needed
+    if (navigationRow.length > 0) {
+      keyboardRows.push(navigationRow);
+    }
+
+    const message = `*Your Bookings (Page ${page}/${totalPages})*\n\n${formattedBookings}`;
+
+    const replyMarkup = Markup.inlineKeyboard(keyboardRows).reply_markup;
+
+    // Try to edit existing message if it's a callback query or send a new message otherwise
+    if (ctx.callbackQuery || isRefresh) {
+      await ctx.editMessageText(message, {
         parse_mode: "Markdown",
+        reply_markup: replyMarkup
+      });
+    } else {
+      await ctx.reply(message, {
+        parse_mode: "Markdown",
+        reply_markup: replyMarkup
       });
     }
+
   } catch (error) {
-    console.error("Error in mybookings command:", error);
-    ctx.reply("Error fetching your bookings. Please try again later.");
+    console.error("Error in showBookings:", error);
+    const errorMessage = ctx.callbackQuery ? 
+      "Error updating bookings. Please try again." :
+      "Error fetching your bookings. Please try again later.";
+    await ctx.reply(errorMessage);
   }
-});
+}
 
 bot.command("test", async (ctx) => {
   try {
@@ -1058,13 +1177,6 @@ bot.command("getvenue", async (ctx) => {
     }
   } catch (error) {
     ctx.reply("Error fetching venue. Please check the ID and try again.");
-  }
-});
-
-// Callback query handler
-bot.on('callback_query', async (ctx) => {
-  if (ctx.callbackQuery && 'data' in ctx.callbackQuery) {
-    await calendar.handleCallbackQuery(ctx);
   }
 });
 
