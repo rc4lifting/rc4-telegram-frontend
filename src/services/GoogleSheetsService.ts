@@ -13,6 +13,9 @@ export class GoogleSheetsService {
   private metadataTitle = 'Metadata';
   private summaryTitle = 'Summary';
 
+  private readonly TIMEZONE = 'Asia/Singapore';
+  private readonly LOCALE = 'en-SG';
+
   constructor(spreadsheetId: string) {
     const email = Bun.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
     const privateKey = Bun.env.GOOGLE_PRIVATE_KEY;
@@ -84,7 +87,7 @@ export class GoogleSheetsService {
     } else {
       await metadataSheet.loadHeaderRow();
       const requiredHeaders = ['Global Hash', 'Last Updated', 'Venue ID', 'Venue Hash'];
-      if (requiredHeaders.some(h => !metadataSheet!.headerValues.includes(h))) {
+      if (requiredHeaders.some(h => !metadataSheet.headerValues.includes(h))) {
         await metadataSheet.setHeaderRow(requiredHeaders);
       }
     }
@@ -96,7 +99,7 @@ export class GoogleSheetsService {
    */
   private async checkAndUpdateGlobalHash(metadataSheet: GoogleSpreadsheetWorksheet, newHash: string) {
     const rows = await metadataSheet.getRows();
-    const lastUpdated = this.formatDate(DateTime.now());
+    const lastUpdated = this.formatDate(DateTime.now().setZone(this.TIMEZONE));
 
     // The first data row (if any) is the global hash row
     let globalChanged = false;
@@ -137,13 +140,12 @@ export class GoogleSheetsService {
     let venueRow = venueRows.find(r => r.get('Venue ID') === venue.id?.toString());
     let venueChanged = false;
 
-    const lastUpdated = this.formatDate(DateTime.now());
     if (!venueRow) {
       // Add a new row at the end for this venue
       await metadataSheet.addRow({
         'Venue ID': venue.id?.toString() || '',
         'Venue Hash': newHash,
-        'Last Updated': lastUpdated
+        'Last Updated': this.formatDate(DateTime.now().setZone(this.TIMEZONE))
       });
       venueChanged = true;
     } else {
@@ -151,7 +153,7 @@ export class GoogleSheetsService {
       if (existingHash !== newHash) {
         // Update the existing row for this specific venue
         venueRow.set('Venue Hash', newHash);
-        venueRow.set('Last Updated', lastUpdated);
+        venueRow.set('Last Updated', this.formatDate(DateTime.now().setZone(this.TIMEZONE)));
         await venueRow.save();
         venueChanged = true;
       }
@@ -219,7 +221,7 @@ export class GoogleSheetsService {
 
     const dates = this.generateDates(14);
     const timeSlots = this.generateTimeSlots();
-    const headerRow = ['TIME SLOT', ...dates.map(this.formatDateHeader)];
+    const headerRow = ['TIME SLOT', ...dates.map((date) => this.formatDateHeader(date))];
     await sheet.setHeaderRow(headerRow);
 
     // Initialize all rows with "FREE"
@@ -287,16 +289,15 @@ export class GoogleSheetsService {
     dates: string[],
     booking: components["schemas"]["GetBookingRequest"]
   ) {
-    const startDateTime = DateTime.fromISO(booking.start_time, { zone: 'Asia/Singapore' });
-    const endDateTime = DateTime.fromISO(booking.end_time, { zone: 'Asia/Singapore' });
+    const startDateTime = DateTime.fromISO(booking.start_time);
+    const endDateTime = DateTime.fromISO(booking.end_time);
     const bookerName = booking.users?.[0]?.name || 'Unknown';
 
-    let tempCurrent = startDateTime;
-    // Iterate day by day until we pass the endDateTime
-    while (tempCurrent.toMillis() <= endDateTime.toMillis()) {
-      const dateStr = tempCurrent.toISODate()!;
+    let current = startDateTime.startOf('day');
+    while (current <= endDateTime) {
+      const dateStr = current.toISODate()!;
       if (!dates.includes(dateStr)) {
-        tempCurrent = tempCurrent.plus({ days: 1 });
+        current = current.plus({ days: 1 });
         continue;
       }
 
@@ -304,16 +305,16 @@ export class GoogleSheetsService {
       for (let i = 0; i < timeSlots.length; i++) {
         const slotStartStr = timeSlots[i].time.split(' - ')[0];
         const [slotHour, slotMin] = slotStartStr.split(':').map(Number);
+        const slotTime = DateTime.fromISO(dateStr)
+          .set({ hour: slotHour, minute: slotMin })
+          .setZone(this.TIMEZONE);
 
-        let slotTime = DateTime.fromISO(dateStr, { zone: 'Asia/Singapore' });
-        slotTime = slotTime.set({ hour: slotHour, minute: slotMin });
-
-        if (slotTime.toMillis() >= startDateTime.toMillis() && slotTime.toMillis() < endDateTime.toMillis()) {
+        if (slotTime >= startDateTime && slotTime < endDateTime) {
           rows[i][dateColumn] = bookerName;
         }
       }
 
-      tempCurrent = tempCurrent.plus({ days: 1 });
+      current = current.plus({ days: 1 });
     }
   }
 
@@ -344,15 +345,19 @@ export class GoogleSheetsService {
    */
   private generateTimeSlots(): { time: string }[] {
     const slots: { time: string }[] = [];
+    const baseDate = DateTime.fromObject({ year: 2024, month: 1, day: 1 }, { zone: this.TIMEZONE });
+    
     for (let hour = 0; hour < 24; hour++) {
       for (const minute of [0, 30]) {
-        const start = this.padTime(hour, minute);
-        const endHour = (minute === 30) ? hour : hour + 1;
-        const endMin = (minute === 30) ? 30 : 0;
-        const end = this.padTime(endHour, endMin);
-        slots.push({ time: `${start} - ${end}` });
+        const startTime = baseDate.set({ hour, minute });
+        const endTime = startTime.plus({ minutes: 30 });
+        
+        slots.push({
+          time: `${startTime.toFormat('HH:mm')} - ${endTime.toFormat('HH:mm')}`
+        });
       }
     }
+    
     return slots;
   }
 
@@ -360,34 +365,25 @@ export class GoogleSheetsService {
    * Generate a list of ISO date strings for 'days' days from now.
    */
   private generateDates(days: number): string[] {
-    const today = DateTime.now().setZone('Asia/Singapore').startOf('day');
-    const dates: string[] = [];
-    for (let i = 0; i < days; i++) {
-      const d = today.plus({ days: i });
-      const isoDate = d.toISODate();
-      if (isoDate) {
-        dates.push(isoDate);
-      }
-    }
-    return dates;
+    const today = DateTime.now().setZone(this.TIMEZONE).startOf('day');
+    return Array.from({ length: days }, (_, i) => 
+      today.plus({ days: i }).toISODate()!
+    );
   }
 
   /**
-   * Format date headers as "Day dd/mm/yyyy" using luxon
+   * Format date headers as dd/mm/yyyy
    */
   private formatDateHeader(dateStr: string): string {
-    const dt = DateTime.fromISO(dateStr, { zone: 'Asia/Singapore' });
-    return dt.toFormat('ccc dd/MM/yyyy');
+    return DateTime.fromISO(dateStr)
+      .setZone(this.TIMEZONE)
+      .toFormat('dd/MM/yyyy');
   }
 
   /**
-   * Format date/time in a full, localized manner
+   * Format date to GMT+8 friendly string
    */
-  private formatDate(dt: DateTime): string {
-    return dt.setZone('Asia/Singapore').toLocaleString(DateTime.DATETIME_FULL_WITH_SECONDS);
-  }
-
-  private padTime(hour: number, minute: number): string {
-    return `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+  private formatDate(date: DateTime): string {
+    return date.setZone(this.TIMEZONE).toFormat('MMMM dd, yyyy HH:mm:ss ZZZZ');
   }
 }
