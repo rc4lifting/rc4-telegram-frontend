@@ -767,7 +767,8 @@ bot.help((ctx) =>
       "🗑 /deletebooking <id> - Delete a specific booking\n" +
       "🏢 /allvenues - List all venues\n" +
       "🔎 /getvenue <id> - Get a specific venue\n" +
-      "📑 /updatesheets - Update Google Sheets with venue data",
+      "📑 /updatesheets - Update Google Sheets with venue data\n" +
+      "📊 /timesheet - View facilities timesheet",
     { parse_mode: "Markdown" }
   )
 );
@@ -1256,6 +1257,26 @@ const sheetsUpdateJob = new CronJob(
   true,
   TIMEZONE
 );
+
+
+
+// Add this command handler after the other bot commands
+bot.command("timesheet", async (ctx) => {
+  try {
+    await ctx.reply(
+      `📊 *RC4 Facilities Timesheet*\n\n` +
+      `View the live facilities timesheet here:\n` +
+      `${process.env.TIMESHEET_URL || "Timesheet URL not configured!"}`,
+      { 
+        parse_mode: "Markdown",
+      }
+    );
+  } catch (error) {
+    console.error("Error in timesheet command:", error);
+    await ctx.reply("Error displaying timesheet link. Please try again later.");
+  }
+});
+
 
 // Launch the bot
 bot.launch().catch((err) => {
