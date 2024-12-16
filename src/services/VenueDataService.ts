@@ -1,6 +1,6 @@
 import { GoogleSheetsService } from "./GoogleSheetsService";
 import { components, operations } from "../../schema/schema.d";
-import axios, { AxiosRequestConfig } from "axios";
+import axios, { AxiosRequestConfig, AxiosError } from "axios";
 import { SessionContext } from "../bot";
 
 interface AuthContext {
@@ -8,6 +8,26 @@ interface AuthContext {
   telegramUsername?: string;
   botToken: string;
 }
+
+// Add a logging utility
+const logger = {
+  info: (message: string, context = {}) => {
+    console.log(JSON.stringify({ level: 'INFO', timestamp: new Date().toISOString(), message, ...context }));
+  },
+  error: (message: string, error: any, context = {}) => {
+    console.error(JSON.stringify({
+      level: 'ERROR',
+      timestamp: new Date().toISOString(),
+      message,
+      error: error instanceof Error ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      } : error,
+      ...context
+    }));
+  }
+};
 
 export async function updateVenueDataInSheets(
   auth: AuthContext | SessionContext
@@ -17,6 +37,11 @@ export async function updateVenueDataInSheets(
   bookingsCount: number;
   message?: string;
 }> {
+  const startTime = Date.now();
+  logger.info('Starting venue data update', { 
+    telegramId: 'from' in auth ? auth.from?.id : auth.telegramId 
+  });
+
   // Extract auth details regardless of input type
   const authDetails: AuthContext = {
     botToken: 'from' in auth ? Bun.env.BOT_TOKEN! : auth.botToken,
@@ -35,16 +60,21 @@ export async function updateVenueDataInSheets(
     let retries = 3;
     while (retries > 0) {
       try {
+        logger.info('Fetching venues', { attemptNumber: 4 - retries });
         const venuesResponse = await apiRequest(
           "get_venues_telegram_venue__get",
           "/telegram/venue/",
           authDetails
         );
         venues = venuesResponse.items;
+        logger.info('Successfully fetched venues', { count: venues.length });
         break;
       } catch (error) {
         retries--;
         if (retries === 0) throw error;
+        logger.error('Venue fetch attempt failed, retrying...', error, { 
+          remainingRetries: retries 
+        });
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
@@ -55,8 +85,8 @@ export async function updateVenueDataInSheets(
     while (retries > 0) {
       try {
         const bookingsResponse = await apiRequest(
-          "get_bookings_telegram_booking__get",
-          "/telegram/booking/",
+          "get_bookings_admin_telegram_booking_get_admin_get",
+          "/telegram/booking/get_admin",
           authDetails,
           undefined,
           { page: 1, size: 100 }
@@ -71,6 +101,10 @@ export async function updateVenueDataInSheets(
     }
 
     if (!venues.length || !bookings.length) {
+      logger.info('No data available for update', { 
+        venuesCount: venues.length, 
+        bookingsCount: bookings.length 
+      });
       return {
         success: false,
         message: "No data to update",
@@ -82,6 +116,13 @@ export async function updateVenueDataInSheets(
     const sheetsService = new GoogleSheetsService(spreadsheetId);
     await sheetsService.updateVenueBookings(bookings, venues);
 
+    const duration = Date.now() - startTime;
+    logger.info('Venue data update completed', {
+      duration: `${duration}ms`,
+      venuesCount: venues.length,
+      bookingsCount: bookings.length
+    });
+
     return {
       success: true,
       message: "Venue data successfully updated in Google Sheets",
@@ -89,7 +130,9 @@ export async function updateVenueDataInSheets(
       bookingsCount: bookings.length
     };
   } catch (error) {
-    console.error("Error updating venue data in sheets:", error);
+    logger.error('Failed to update venue data in sheets', error, {
+      duration: `${Date.now() - startTime}ms`
+    });
     throw error;
   }
 }
@@ -114,12 +157,18 @@ async function apiRequest<T extends keyof operations>(
   const API_BASE_URL = Bun.env.API_BASE_URL || "";
   const url = `${API_BASE_URL}${path}`;
 
-  // Map operationId to the appropriate HTTP method
   const methodMap: Record<string, string> = {
     get_venues_telegram_venue__get: "GET",
-    get_bookings_telegram_booking__get: "GET"
+    get_bookings_admin_telegram_booking_get_admin_get: "GET"
   };
   const method = methodMap[operationId] || "GET";
+
+  logger.info('Making API request', {
+    method,
+    path,
+    operationId,
+    hasParams: !!params
+  });
 
   const headers = {
     "Content-Type": "application/json",
@@ -137,12 +186,22 @@ async function apiRequest<T extends keyof operations>(
   };
 
   try {
-    console.log(`Making ${method} request to ${url}...`);
     const response = await axios(config);
-    console.log(`Received response: HTTP ${response.status}`);
+    logger.info('API request successful', {
+      status: response.status,
+      path,
+      dataSize: JSON.stringify(response.data).length
+    });
     return response.data;
   } catch (error) {
-    console.error(`API request failed for ${url}:`, error);
+    logger.error('API request failed', error instanceof AxiosError ? {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data
+    } : error, {
+      path,
+      method
+    });
     throw error;
   }
 }

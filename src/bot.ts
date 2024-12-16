@@ -1096,34 +1096,48 @@ bot.catch((err, ctx) => {
 
 // Update sheets command
 bot.command("updatesheets", async (ctx) => {
-  try {
-    await ctx.reply("🔄 Starting venue data update...");
-    
-    const result = await updateVenueDataInSheets(ctx);
-    
-    if (!result.success) {
-      await ctx.reply(
-        "ℹ️ No updates needed - data unchanged since last update",
+  // Immediately acknowledge the command
+  const statusMessage = await ctx.reply("🔄 Starting venue data update...");
+  
+  // Launch the update process asynchronously
+  updateVenueDataInSheets(ctx)
+    .then(async (result) => {
+      if (!result.success) {
+        await ctx.telegram.editMessageText(
+          ctx.chat!.id,
+          statusMessage.message_id,
+          undefined,
+          "ℹ️ No updates needed - data unchanged since last update",
+          { parse_mode: "Markdown" }
+        );
+        return;
+      }
+      
+      await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        statusMessage.message_id,
+        undefined,
+        `✅ Successfully updated Google Sheets!\n\n` +
+        `📊 *Summary:*\n` +
+        `• Venues processed: ${result.venuesCount}\n` +
+        `• Bookings processed: ${result.bookingsCount}\n\n` +
+        `🔗 Sheet URL: ${process.env.GOOGLE_SHEETS_URL || "Not configured"}`,
         { parse_mode: "Markdown" }
       );
-      return;
-    }
-    
-    await ctx.reply(
-      `✅ Successfully updated Google Sheets!\n\n` +
-      `📊 *Summary:*\n` +
-      `• Venues processed: ${result.venuesCount}\n` +
-      `• Bookings processed: ${result.bookingsCount}\n\n` +
-      `🔗 Sheet URL: ${process.env.GOOGLE_SHEETS_URL || "Not configured"}`,
-      { parse_mode: "Markdown" }
-    );
-  } catch (error) {
-    console.error("Error in updatesheets command:", error);
-    await ctx.reply(
-      "❌ Failed to update Google Sheets. Please check the logs or contact support.",
-      { parse_mode: "Markdown" }
-    );
-  }
+    })
+    .catch(async (error) => {
+      console.error("Error in updatesheets command:", error);
+      await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        statusMessage.message_id,
+        undefined,
+        "❌ Failed to update Google Sheets. Please check the logs or contact support.",
+        { parse_mode: "Markdown" }
+      );
+    });
+
+  // Immediately return to allow the update to happen in the background
+  return;
 });
 
 bot.on('callback_query', async (ctx) => {
