@@ -406,23 +406,27 @@ export class BookingCalendar {
     existingBookings?: components["schemas"]["GetBookingRequest"][]
   ): Promise<string[]> {
     const slots: string[] = [];
-    // We consider the day in the given timezone
     const targetDate = date.startOf('day');
 
     for (let hour = this.startHour; hour <= this.endHour; hour++) {
       for (let min = 0; min < 60; min += this.timeStepMinutes) {
         const slotDate = targetDate.set({ hour, minute: min });
 
-        // Check if booked
+        // Modified booking check to allow back-to-back bookings
         const isBooked = existingBookings?.some(booking => {
           const tzBookingStart = DateTime.fromISO(booking.start_time, { zone: this.timezone });
           const tzBookingEnd = DateTime.fromISO(booking.end_time, { zone: this.timezone });
-          return slotDate >= tzBookingStart && slotDate <= tzBookingEnd;
+          
+          // For start times, slot is booked if it's between start and end (exclusive of end)
+          if (isStartTime) {
+            return slotDate >= tzBookingStart && slotDate < tzBookingEnd;
+          }
+          // For end times, slot is booked if it's after start (exclusive) and before or at end
+          return slotDate > tzBookingStart && slotDate <= tzBookingEnd;
         });
         if (isBooked) continue;
 
         if (!isStartTime) {
-          // Find the earliest booking start time after startDateTime
           let earliestNextBookingStart: DateTime | null = null;
           if (existingBookings && startDateTime) {
             for (const booking of existingBookings) {
@@ -435,28 +439,25 @@ export class BookingCalendar {
             }
           }
 
-          // Don't allow end times that would overlap with next booking
-          if (earliestNextBookingStart && slotDate >= earliestNextBookingStart) {
+          // Allow end time to match the start of next booking
+          if (earliestNextBookingStart && slotDate > earliestNextBookingStart) {
             break;
           }
 
-          // Ensure end time is after start time on same day
+          // Ensure end time is after start time
           if (startDateTime && slotDate <= startDateTime) continue;
         }
 
         if (isStartTime) {
-          // For start times, slot must be in the future
           if (slotDate > now) {
             slots.push(this.formatTime(slotDate));
           }
         } else {
-          // For end times, must be after the startDateTime if same day
           if (startDateTime) {
             if (slotDate > startDateTime) {
               slots.push(this.formatTime(slotDate));
             }
           } else {
-            // If no startDateTime (different day scenario), just ensure it's after now
             if (slotDate > now) {
               slots.push(this.formatTime(slotDate));
             }
