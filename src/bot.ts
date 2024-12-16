@@ -2,9 +2,9 @@ import { Telegraf, Context, Markup } from "telegraf";
 import { session } from "telegraf";
 import axios, { AxiosRequestConfig, AxiosError } from "axios";
 import { components, operations } from "../schema/schema.d";
-import { GoogleSheetsService } from "./services/GoogleSheetsService";
 import { updateVenueDataInSheets } from "./services/VenueDataService";
 import { DateTime } from "luxon";
+import { CronJob } from "cron";
 
 export type BookingStep = "start_date" | "start_time" | "end_date" | "end_time" | "confirm";
 
@@ -1225,6 +1225,38 @@ bot.on('callback_query', async (ctx) => {
   }
 });
 
+// Create a cron job to update sheets every 30 seconds
+const sheetsUpdateJob = new CronJob(
+  '*/5 * * * *',
+  async () => {
+    try {
+      console.log(`[${DateTime.now().toISO()}] Running scheduled Google Sheets update...`);
+      
+      const auth = {
+        botToken: Bun.env.BOT_TOKEN!,
+        telegramId: Bun.env.TELEGRAM_SERVICE_ACCOUNT_ID,
+        telegramUsername: Bun.env.TELEGRAM_SERVICE_ACCOUNT_USERNAME
+      };
+      
+      const result = await updateVenueDataInSheets(auth);
+      
+      if (result.success) {
+        console.log(
+          `[${DateTime.now().toISO()}] Sheets update successful:`,
+          `Processed ${result.venuesCount} venues and ${result.bookingsCount} bookings`
+        );
+      } else {
+        console.log(`[${DateTime.now().toISO()}] No updates needed - ${result.message}`);
+      }
+    } catch (error) {
+      console.error(`[${DateTime.now().toISO()}] Sheets update failed:`, error);
+    }
+  },
+  null,
+  true,
+  TIMEZONE
+);
+
 // Launch the bot
 bot.launch().catch((err) => {
   console.error("Error launching bot:", err);
@@ -1232,5 +1264,11 @@ bot.launch().catch((err) => {
 });
 
 // Graceful stop
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+process.once("SIGINT", () => {
+  sheetsUpdateJob.stop();
+  bot.stop("SIGINT");
+});
+process.once("SIGTERM", () => {
+  sheetsUpdateJob.stop();
+  bot.stop("SIGTERM");
+});
