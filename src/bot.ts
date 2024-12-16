@@ -5,6 +5,7 @@ import { components, operations } from "../schema/schema.d";
 import { updateVenueDataInSheets } from "./services/VenueDataService";
 import { DateTime } from "luxon";
 import { CronJob } from "cron";
+import { AuthContext, apiRequest } from "./services/VenueDataService";
 
 export type BookingStep = "start_date" | "start_time" | "end_date" | "end_time" | "confirm";
 
@@ -204,12 +205,12 @@ export class BookingCalendar {
       const date = DateTime.fromISO(dateISO, { zone: this.timezone });
       const now = DateTime.local().setZone(this.timezone);
 
-      // Fetch existing bookings
+      // Fetch existing bookings using admin endpoint with auth details
       const response = await apiRequest(
-        "get_bookings_telegram_booking__get",
-        "/telegram/booking/",
-        ctx,
-        null,
+        "get_bookings_admin_telegram_booking_get_admin_get",
+        "/telegram/booking/get_admin",
+        createServiceAuth(),
+        undefined,
         {
           venueId: ctx.session.currentBooking?.venue_id,
           page: 1,
@@ -281,10 +282,11 @@ export class BookingCalendar {
       const [startHour, startMin] = startTime.split(":").map(Number);
       const startDateTime = startDate.set({ hour: startHour, minute: startMin });
       
+
       const response = await apiRequest(
-        "get_bookings_telegram_booking__get",
-        "/telegram/booking/",
-        ctx,
+        "get_bookings_admin_telegram_booking_get_admin_get",
+        "/telegram/booking/get_admin",
+        createServiceAuth(),
         null,
         {
           venueId: ctx.session.currentBooking?.venue_id,
@@ -415,7 +417,7 @@ export class BookingCalendar {
         const isBooked = existingBookings?.some(booking => {
           const tzBookingStart = DateTime.fromISO(booking.start_time, { zone: this.timezone });
           const tzBookingEnd = DateTime.fromISO(booking.end_time, { zone: this.timezone });
-          return slotDate >= tzBookingStart && slotDate < tzBookingEnd;
+          return slotDate >= tzBookingStart && slotDate <= tzBookingEnd;
         });
         if (isBooked) continue;
 
@@ -571,7 +573,7 @@ const calendar = new BookingCalendar(
         await apiRequest(
           "add_booking_telegram_booking__post",
           "/telegram/booking/",
-          ctx,
+          createUserAuth(ctx),
           booking
         );
       } catch (error: any) {
@@ -609,7 +611,7 @@ const calendar = new BookingCalendar(
       const venueResponse = await apiRequest(
         "get_venues_telegram_venue__get",
         "/telegram/venue/",
-        ctx
+        createUserAuth(ctx)
       );
       const venues = venueResponse.items as components["schemas"]["Venue"][];
       const venue = venues.find(v => v.id === booking.venue_id);
@@ -685,65 +687,65 @@ const calendar = new BookingCalendar(
   }
 );
 
-async function apiRequest<T extends keyof operations>(
-  operationId: T,
-  path: string,
-  ctx: SessionContext,
-  data?: any,
-  params?: any
-): Promise<any> {
-  const baseUrl = API_BASE_URL.replace(/\/$/, '');
-  const url = `${baseUrl}${path}`;
-  const headers = {
-    "Content-Type": "application/json",
-    AccessToken: Bun.env.BOT_TOKEN || "",
-    TelegramId: String(ctx.from?.id || ""),
-    TelegramUsername: ctx.from?.username || "",
-  };
+// async function apiRequest<T extends keyof operations>(
+//   operationId: T,
+//   path: string,
+//   ctx: SessionContext,
+//   data?: any,
+//   params?: any
+// ): Promise<any> {
+//   const baseUrl = API_BASE_URL.replace(/\/$/, '');
+//   const url = `${baseUrl}${path}`;
+//   const headers = {
+//     "Content-Type": "application/json",
+//     AccessToken: Bun.env.BOT_TOKEN || "",
+//     TelegramId: String(ctx.from?.id || ""),
+//     TelegramUsername: ctx.from?.username || "",
+//   };
 
-  const methodMap: { [key: string]: string } = {
-    get_venues_telegram_venue__get: "GET",
-    add_booking_telegram_booking__post: "POST",
-    get_bookings_telegram_booking__get: "GET",
-    get_user_profile_telegram_user_userProfile_get: "GET",
-    delete_booking_telegram_booking_deleteBooking_delete: "DELETE",
-  };
+//   const methodMap: { [key: string]: string } = {
+//     get_venues_telegram_venue__get: "GET",
+//     add_booking_telegram_booking__post: "POST",
+//     get_bookings_telegram_booking__get: "GET",
+//     get_user_profile_telegram_user_userProfile_get: "GET",
+//     delete_booking_telegram_booking_deleteBooking_delete: "DELETE",
+//   };
 
-  const method = methodMap[operationId] || "GET";
+//   const method = methodMap[operationId] || "GET";
 
-  const config: AxiosRequestConfig = {
-    method,
-    url,
-    data,
-    params,
-    headers,
-  };
+//   const config: AxiosRequestConfig = {
+//     method,
+//     url,
+//     data,
+//     params,
+//     headers,
+//   };
 
-  console.log("Sending request:", JSON.stringify(config, null, 2));
+//   console.log("Sending request:", JSON.stringify(config, null, 2));
 
-  try {
-    const response = await axios(config);
-    console.log(
-      "Response received:",
-      response.status,
-      JSON.stringify(response.data, null, 2)
-    );
-    return response.data;
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      const axiosError = error as AxiosError;
-      console.error(`API Request Error: ${axiosError.message}`);
-      console.error(`Request URL: ${url}`);
-      console.error(`Request Method: ${method}`);
-      console.error(`Request Headers:`, JSON.stringify(headers, null, 2));
-      console.error(`Response Status: ${axiosError.response?.status}`);
-      console.error(`Response Data: ${JSON.stringify(axiosError.response?.data)}`);
-    } else {
-      console.error(`Non-Axios Error: ${error}`);
-    }
-    throw error;
-  }
-}
+//   try {
+//     const response = await axios(config);
+//     console.log(
+//       "Response received:",
+//       response.status,
+//       JSON.stringify(response.data, null, 2)
+//     );
+//     return response.data;
+//   } catch (error) {
+//     if (axios.isAxiosError(error)) {
+//       const axiosError = error as AxiosError;
+//       console.error(`API Request Error: ${axiosError.message}`);
+//       console.error(`Request URL: ${url}`);
+//       console.error(`Request Method: ${method}`);
+//       console.error(`Request Headers:`, JSON.stringify(headers, null, 2));
+//       console.error(`Response Status: ${axiosError.response?.status}`);
+//       console.error(`Response Data: ${JSON.stringify(axiosError.response?.data)}`);
+//     } else {
+//       console.error(`Non-Axios Error: ${error}`);
+//     }
+//     throw error;
+//   }
+// }
 
 // Bot commands and handlers remain largely the same, just ensure they work with the new date handling
 
@@ -794,7 +796,7 @@ bot.command("venues", async (ctx) => {
     const response = await apiRequest(
       "get_venues_telegram_venue__get",
       "/telegram/venue/",
-      ctx
+      createUserAuth(ctx)
     );
     const venues = response.items as components["schemas"]["Venue"][];
     const venueList = venues
@@ -817,7 +819,7 @@ bot.command("book", async (ctx) => {
     const response = await apiRequest(
       "get_venues_telegram_venue__get",
       "/telegram/venue/",
-      ctx
+      createUserAuth(ctx)
     );
     const venues = response.items as components["schemas"]["Venue"][];
     const keyboard = venues.map((venue) => [
@@ -849,7 +851,7 @@ bot.action(/^book_venue_(\d+)$/, async (ctx) => {
       const response = await apiRequest(
         "get_venues_telegram_venue__get",
         "/telegram/venue/",
-        ctx
+        createUserAuth(ctx)
       );
       const venues = response.items as components["schemas"]["Venue"][];
       const selectedVenue = venues.find(v => v.id === venueId);
@@ -894,7 +896,7 @@ bot.action(/^delete_booking_(\d+)_(\d+)$/, async (ctx) => {
     await apiRequest(
       "delete_booking_telegram_booking_deleteBooking_delete",
       `/telegram/booking/deleteBooking`,
-      ctx,
+      createUserAuth(ctx),
       null,
       { bookingId: bookingId.toString() }
     );
@@ -915,7 +917,7 @@ async function showBookings(ctx: SessionContext, page: number, isRefresh = false
     const response = await apiRequest(
       "get_bookings_telegram_booking__get",
       "/telegram/booking/",
-      ctx,
+      createUserAuth(ctx),
       null,
       {
         page: page,
@@ -942,7 +944,7 @@ async function showBookings(ctx: SessionContext, page: number, isRefresh = false
     const venueResponse = await apiRequest(
       "get_venues_telegram_venue__get",
       "/telegram/venue/",
-      ctx
+      createUserAuth(ctx)
     );
     const allVenues = venueResponse.items as components["schemas"]["Venue"][];
 
@@ -1027,7 +1029,7 @@ bot.command("profile", async (ctx) => {
     const profile = await apiRequest(
       "get_user_profile_telegram_user_userProfile_get",
       "/telegram/user/userProfile",
-      ctx
+      createUserAuth(ctx)
     );
     ctx.reply(
       `👤 *Your profile:*\n🆔 *NUS Net ID:* ${
@@ -1045,9 +1047,9 @@ bot.command("profile", async (ctx) => {
 bot.command("allbookings", async (ctx) => {
   try {
     const response = await apiRequest(
-      "get_bookings_telegram_booking__get",
-      "/telegram/booking/",
-      ctx
+      "get_bookings_admin_telegram_booking_get_admin_get",
+      "/telegram/booking/get_admin",
+      createUserAuth(ctx)
     );
     const bookings = response.items as components["schemas"]["GetBookingRequest"][];
     if (!bookings || bookings.length === 0) {
@@ -1073,7 +1075,7 @@ bot.command("allvenues", async (ctx) => {
     const response = await apiRequest(
       "get_venues_telegram_venue__get",
       "/telegram/venue/",
-      ctx
+      createUserAuth(ctx)
     );
     const venues = response.items as components["schemas"]["Venue"][];
     const venueList = venues
@@ -1212,3 +1214,19 @@ process.once("SIGTERM", () => {
   sheetsUpdateJob.stop();
   bot.stop("SIGTERM");
 });
+
+function createUserAuth(ctx: SessionContext): AuthContext {
+  return {
+    botToken: Bun.env.BOT_TOKEN!,
+    telegramId: String(ctx.from?.id),
+    telegramUsername: ctx.from?.username
+  };
+}
+
+function createServiceAuth(): AuthContext {
+  return {
+    botToken: Bun.env.BOT_TOKEN!,
+    telegramId: Bun.env.TELEGRAM_SERVICE_ACCOUNT_ID,
+    telegramUsername: Bun.env.TELEGRAM_SERVICE_ACCOUNT_USERNAME
+  };
+}

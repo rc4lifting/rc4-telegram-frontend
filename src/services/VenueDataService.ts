@@ -3,7 +3,7 @@ import { components, operations } from "../../schema/schema.d";
 import axios, { AxiosRequestConfig, AxiosError } from "axios";
 import { SessionContext } from "../bot";
 
-interface AuthContext {
+export interface AuthContext {
   telegramId?: string;
   telegramUsername?: string;
   botToken: string;
@@ -147,7 +147,7 @@ export async function updateVenueDataInSheets(
  * @param params - Optional query parameters.
  * @returns The response data from the API.
  */
-async function apiRequest<T extends keyof operations>(
+export async function apiRequest<T extends keyof operations>(
   operationId: T,
   path: string,
   auth: AuthContext,
@@ -157,11 +157,19 @@ async function apiRequest<T extends keyof operations>(
   const API_BASE_URL = Bun.env.API_BASE_URL || "";
   const url = `${API_BASE_URL}${path}`;
 
-  const methodMap: Record<string, string> = {
+  const methodMap: { [key: string]: string } = {
     get_venues_telegram_venue__get: "GET",
+    add_booking_telegram_booking__post: "POST",
+    get_bookings_telegram_booking__get: "GET",
+    get_user_profile_telegram_user_userProfile_get: "GET",
+    delete_booking_telegram_booking_deleteBooking_delete: "DELETE",
     get_bookings_admin_telegram_booking_get_admin_get: "GET"
   };
-  const method = methodMap[operationId] || "GET";
+
+  const method = methodMap[operationId];
+  if (!method) {
+    throw new Error(`Unknown operation ID: ${operationId}`);
+  }
 
   logger.info('Making API request', {
     method,
