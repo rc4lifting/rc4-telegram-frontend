@@ -1,5 +1,5 @@
 import { GoogleSheetsService } from "./GoogleSheetsService";
-import { components, operations } from "../../schema/schema.d";
+import { components, operations } from "../schema/schema";
 import axios, { AxiosRequestConfig, AxiosError } from "axios";
 import { SessionContext } from "../bot";
 

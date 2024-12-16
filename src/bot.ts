@@ -1,7 +1,7 @@
 import { Telegraf, Context, Markup } from "telegraf";
 import { session } from "telegraf";
 import axios, { AxiosRequestConfig, AxiosError } from "axios";
-import { components, operations } from "../schema/schema.d";
+import { components, operations } from "./schema/schema";
 import { updateVenueDataInSheets } from "./services/VenueDataService";
 import { DateTime } from "luxon";
 import { CronJob } from "cron";

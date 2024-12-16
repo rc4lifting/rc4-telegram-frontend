@@ -526,6 +526,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fbs/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Fbs Requests */
+        get: operations["get_fbs_requests_fbs__get"];
+        /** Update Fbs Request */
+        put: operations["update_fbs_request_fbs__put"];
+        /** Create Fbs Request */
+        post: operations["create_fbs_request_fbs__post"];
+        /** Delete Fbs Request */
+        delete: operations["delete_fbs_request_fbs__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fbs/not_started": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Not Started Requests */
+        get: operations["get_not_started_requests_fbs_not_started_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fbs/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Pending Requests */
+        get: operations["get_pending_requests_fbs_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telegram/fbs/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Fbs Requests */
+        get: operations["get_fbs_requests_telegram_fbs__get"];
+        /** Update Fbs Request */
+        put: operations["update_fbs_request_telegram_fbs__put"];
+        /** Create Fbs Request */
+        post: operations["create_fbs_request_telegram_fbs__post"];
+        /** Delete Fbs Request */
+        delete: operations["delete_fbs_request_telegram_fbs__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telegram/fbs/not_started": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Not Started Requests */
+        get: operations["get_not_started_requests_telegram_fbs_not_started_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telegram/fbs/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Pending Requests */
+        get: operations["get_pending_requests_telegram_fbs_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -577,6 +685,26 @@ export interface components {
             /** Users */
             users: string[];
         };
+        /** CreateFBSRequest */
+        CreateFBSRequest: {
+            booking_request?: components["schemas"]["GetBookingRequest"];
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /**
+             * End Time
+             * Format: date-time
+             */
+            end_time: string;
+            /** Purpose */
+            purpose: string;
+            venue: components["schemas"]["Venue"];
+            usage_type: components["schemas"]["FBSUsageType"];
+            /** Attendee Count */
+            attendee_count: number;
+        };
         /** CreateVenueRequest */
         CreateVenueRequest: {
             /** Name */
@@ -584,8 +712,37 @@ export interface components {
             /** Desc */
             desc: string;
         };
+        /** DeleteFBSRequest */
+        DeleteFBSRequest: {
+            /** Fbs Request Id */
+            fbs_request_id: number;
+            /** Deletion Reason */
+            deletion_reason?: string;
+            /** Deleted By User Id */
+            deleted_by_user_id?: string;
+        };
+        /**
+         * FBSRequestErrorType
+         * @description An enumeration.
+         * @enum {string}
+         */
+        FBSRequestErrorType: "InvalidBookingTime" | "SlotTaken" | "ElementNotFound" | "Other";
+        /**
+         * FBSRequestStatus
+         * @description An enumeration.
+         * @enum {string}
+         */
+        FBSRequestStatus: "NOT_STARTED" | "PENDING" | "SUCCESS" | "FAILED";
+        /**
+         * FBSUsageType
+         * @description An enumeration.
+         * @enum {string}
+         */
+        FBSUsageType: "ACADEMIC" | "MAINTENANCE" | "MEETING" | "STUDENT_ACTIVITIES";
         /** GetBookingRequest */
         GetBookingRequest: {
+            /** Id */
+            id: number;
             /** Desc */
             desc: string;
             /**
@@ -616,6 +773,50 @@ export interface components {
             ig?: string;
             /** Users */
             users: components["schemas"]["UserBooking"][];
+        };
+        /** GetFBSRequest */
+        GetFBSRequest: {
+            /** Id */
+            id: number;
+            booking_request?: components["schemas"]["GetBookingRequest"];
+            /** Fbs Reference Id */
+            fbs_reference_id?: string;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /**
+             * End Time
+             * Format: date-time
+             */
+            end_time: string;
+            /** Purpose */
+            purpose: string;
+            venue: components["schemas"]["Venue"];
+            usage_type: components["schemas"]["FBSUsageType"];
+            /** Attendee Count */
+            attendee_count: number;
+            request_status: components["schemas"]["FBSRequestStatus"];
+            error_type?: components["schemas"]["FBSRequestErrorType"];
+            /** Error Message */
+            error_message?: string;
+            /** Screenshot Path */
+            screenshot_path?: string;
+            /**
+             * Created At
+             * Format: date-time
+             * @default 2024-12-16T10:36:44.320367
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             * @default 2024-12-16T10:36:44.320392
+             */
+            updated_at: string;
+            /** Attempt Count */
+            attempt_count: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -648,6 +849,19 @@ export interface components {
         Page_GetBookingRequest_: {
             /** Items */
             items: components["schemas"]["GetBookingRequest"][];
+            /** Total */
+            total?: number;
+            /** Page */
+            page?: number;
+            /** Size */
+            size?: number;
+            /** Pages */
+            pages?: number;
+        };
+        /** Page[GetFBSRequest] */
+        Page_GetFBSRequest_: {
+            /** Items */
+            items: components["schemas"]["GetFBSRequest"][];
             /** Total */
             total?: number;
             /** Page */
@@ -714,6 +928,19 @@ export interface components {
             users: string[];
             /** Status */
             status?: string;
+        };
+        /** UpdateFBSRequest */
+        UpdateFBSRequest: {
+            /** Fbs Request Id */
+            fbs_request_id: number;
+            request_status?: components["schemas"]["FBSRequestStatus"];
+            error_type?: components["schemas"]["FBSRequestErrorType"];
+            /** Error Message */
+            error_message?: string;
+            /** Screenshot Path */
+            screenshot_path?: string;
+            /** Attempt Count */
+            attempt_count?: number;
         };
         /** UpdateVenueRequest */
         UpdateVenueRequest: {
@@ -1818,6 +2045,402 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fbs_requests_fbs__get: {
+        parameters: {
+            query?: {
+                venue_id?: number;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": string[];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_GetFBSRequest_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_fbs_request_fbs__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateFBSRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_fbs_request_fbs__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFBSRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_fbs_request_fbs__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteFBSRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_not_started_requests_fbs_not_started_get: {
+        parameters: {
+            query?: {
+                venue_id?: number;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_GetFBSRequest_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pending_requests_fbs_pending_get: {
+        parameters: {
+            query?: {
+                venue_id?: number;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_GetFBSRequest_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fbs_requests_telegram_fbs__get: {
+        parameters: {
+            query?: {
+                venue_id?: number;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": string[];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_GetFBSRequest_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_fbs_request_telegram_fbs__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateFBSRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_fbs_request_telegram_fbs__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateFBSRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_fbs_request_telegram_fbs__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteFBSRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_not_started_requests_telegram_fbs_not_started_get: {
+        parameters: {
+            query?: {
+                venue_id?: number;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_GetFBSRequest_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pending_requests_telegram_fbs_pending_get: {
+        parameters: {
+            query?: {
+                venue_id?: number;
+                page?: number;
+                size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_GetFBSRequest_"];
+                };
             };
             /** @description Validation Error */
             422: {

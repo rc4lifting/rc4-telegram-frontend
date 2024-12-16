@@ -1,6 +1,6 @@
 import { GoogleSpreadsheet, GoogleSpreadsheetWorksheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
-import { components } from '../../schema/schema';
+import { components } from '../schema/schema';
 import crypto from 'crypto';
 import { DateTime } from 'luxon';
 
