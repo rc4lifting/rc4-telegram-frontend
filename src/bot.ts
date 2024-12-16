@@ -763,10 +763,7 @@ bot.help((ctx) =>
       "🗓 /mybookings - View your bookings\n" +
       "👤 /profile - View your profile\n" +
       "📊 /allbookings - View all bookings\n" +
-      "🔍 /getbooking <id> - Get a specific booking\n" +
-      "🗑 /deletebooking <id> - Delete a specific booking\n" +
-      "🏢 /allvenues - List all venues\n" +
-      "🔎 /getvenue <id> - Get a specific venue\n" +
+      "🔍 /allvenues - List all venues\n" +
       "📑 /updatesheets - Update Google Sheets with venue data\n" +
       "📊 /timesheet - View facilities timesheet",
     { parse_mode: "Markdown" }
@@ -1025,22 +1022,6 @@ async function showBookings(ctx: SessionContext, page: number, isRefresh = false
   }
 }
 
-bot.command("test", async (ctx) => {
-  try {
-    await apiRequest(
-      "get_user_profile_telegram_user_userProfile_get",
-      "/telegram/user/userProfile",
-      ctx
-    );
-    ctx.reply("✅ Test successful! Bot is connected and working properly.");
-  } catch (error) {
-    console.error("Test command error:", error);
-    ctx.reply(
-      "Test failed. There might be an issue with the bot or API connection."
-    );
-  }
-});
-
 bot.command("profile", async (ctx) => {
   try {
     const profile = await apiRequest(
@@ -1087,52 +1068,6 @@ bot.command("allbookings", async (ctx) => {
   }
 });
 
-bot.command("getbooking", async (ctx) => {
-  const bookingId = ctx.message?.text.split(" ")[1];
-  if (!bookingId) {
-    return ctx.reply("Please provide a booking ID. Usage: /getbooking <id>");
-  }
-  try {
-    const response = await apiRequest(
-      "get_bookings_telegram_booking__get",
-      `/telegram/booking/`,
-      ctx,
-      null,
-      { bookingId: bookingId }
-    );
-    const booking = response.items.find((b: any) => b.id === parseInt(bookingId));
-    if (booking) {
-      ctx.reply(
-        `🔖 *Booking details:*\n🏢 *Venue:* ${booking.venue_id}\n📝 *Description:* ${booking.desc}\n🕒 *Start:* ${booking.start_time}\n🕕 *End:* ${booking.end_time}`,
-        { parse_mode: "Markdown" }
-      );
-    } else {
-      ctx.reply("Booking not found.");
-    }
-  } catch (error) {
-    ctx.reply("Error fetching booking. Please check the ID and try again.");
-  }
-});
-
-bot.command("deletebooking", async (ctx) => {
-  const bookingId = ctx.message?.text.split(" ")[1];
-  if (!bookingId) {
-    return ctx.reply("Please provide a booking ID. Usage: /deletebooking <id>");
-  }
-  try {
-    await apiRequest(
-      "delete_booking_telegram_booking_deleteBooking_delete",
-      `/telegram/booking/deleteBooking`,
-      ctx,
-      null,
-      { bookingId: bookingId }
-    );
-    ctx.reply("🗑 Booking deleted successfully.");
-  } catch (error) {
-    ctx.reply("Error deleting booking. Please check the ID and try again.");
-  }
-});
-
 bot.command("allvenues", async (ctx) => {
   try {
     const response = await apiRequest(
@@ -1149,35 +1084,6 @@ bot.command("allvenues", async (ctx) => {
     ctx.reply(`*All venues:*\n\n${venueList}`, { parse_mode: "Markdown" });
   } catch (error) {
     ctx.reply("Error fetching venues. Please try again later.");
-  }
-});
-
-bot.command("getvenue", async (ctx) => {
-  const venueId = ctx.message?.text.split(" ")[1];
-  if (!venueId) {
-    return ctx.reply("Please provide a venue ID. Usage: /getvenue <id>");
-  }
-  try {
-    const response = await apiRequest(
-      "get_venues_telegram_venue__get",
-      `/telegram/venue/`,
-      ctx,
-      null,
-      { venueId: venueId }
-    );
-    const venue = response.items.find((v: any) => v.id === parseInt(venueId));
-    if (venue) {
-      ctx.reply(
-        `${getVenueEmoji(venue.name)} *Venue details:*\n📛 *Name:* ${
-          venue.name
-        }\n📝 *Description:* ${venue.desc}`,
-        { parse_mode: "Markdown" }
-      );
-    } else {
-      ctx.reply("Venue not found.");
-    }
-  } catch (error) {
-    ctx.reply("Error fetching venue. Please check the ID and try again.");
   }
 });
 
@@ -1257,7 +1163,6 @@ const sheetsUpdateJob = new CronJob(
   true,
   TIMEZONE
 );
-
 
 
 // Add this command handler after the other bot commands
