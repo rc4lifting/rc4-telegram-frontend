@@ -1,8 +1,6 @@
 import { Browser, Page, ElementHandle, Frame } from "puppeteer";
-import dotenv from 'dotenv';
 import puppeteer from "puppeteer";
 
-dotenv.config();
 
 const UTOWNFBS_USERNAME: string = process.env.UTOWNFBS_USERNAME as string;
 const UTOWNFBS_PASSWORD: string = process.env.UTOWNFBS_PASSWORD as string;
@@ -11,7 +9,12 @@ interface UsageTypeSignature {
     [key: string]: string;
 }
 
-class FBSInteractor {
+export interface Credentials {
+    utownfbs_username: string;
+    utownfbs_password: string;
+}
+
+export class FBSInteractor {
 
     constructor() {}
 
@@ -49,6 +52,7 @@ class FBSInteractor {
      * @param locationID e.g. 10 (Gym)
      * @param usageType e.g. "Student Activities"
      * @param userCount e.g. 2
+     * @param credentials User's FBS credentials
      */
     static async bookSlot(
         startTime: string,
@@ -56,7 +60,8 @@ class FBSInteractor {
         purpose: string,
         locationID: number,
         usageType: string,
-        userCount: number
+        userCount: number,
+        credentials: Credentials
     ): Promise<string | undefined> {
         console.log("Starting booking process...");
 
@@ -116,8 +121,8 @@ class FBSInteractor {
 
             console.log("Logging in...");
             await page.waitForSelector('input[id="userNameInput"]', { visible: true });
-            await page.type('input[id="userNameInput"]', UTOWNFBS_USERNAME);
-            await page.type('input[id="passwordInput"]', UTOWNFBS_PASSWORD);
+            await page.type('input[id="userNameInput"]', credentials.utownfbs_username);
+            await page.type('input[id="passwordInput"]', credentials.utownfbs_password);
             await page.click('span[id="submitButton"]');
 
             console.log("Waiting for page load after login...");
