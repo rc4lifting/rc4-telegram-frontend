@@ -1,10 +1,6 @@
 import { Browser, Page, ElementHandle, Frame } from "puppeteer";
 import puppeteer from "puppeteer";
 
-
-const UTOWNFBS_USERNAME: string = process.env.UTOWNFBS_USERNAME as string;
-const UTOWNFBS_PASSWORD: string = process.env.UTOWNFBS_PASSWORD as string;
-
 interface UsageTypeSignature {
     [key: string]: string;
 }
@@ -61,6 +57,8 @@ export class FBSInteractor {
         locationID: number,
         usageType: string,
         userCount: number,
+        doorAccess: boolean,
+        aircon: boolean,
         credentials: Credentials
     ): Promise<string | undefined> {
         console.log("Starting booking process...");
@@ -268,6 +266,24 @@ export class FBSInteractor {
             await purposeTextarea.type(purpose);
             await FBSInteractor.sleep(2000);
 
+            // Handle door access checkbox
+            const doorAccessCheckbox = await bookingFrame.$('input[name="DoorAccess$ctl02"]');
+            if (!doorAccessCheckbox) throw new ExpectedElementNotFound("Door Access checkbox not found.");
+            const isDoorAccessChecked = await doorAccessCheckbox.evaluate(el => (el as HTMLInputElement).checked);
+            if (isDoorAccessChecked !== doorAccess) {
+                await doorAccessCheckbox.click();
+            }
+
+            // Handle aircon checkbox
+            const airconCheckbox = await bookingFrame.$('input[name="Aircon$ctl02"]');
+            if (!airconCheckbox) throw new ExpectedElementNotFound("Aircon checkbox not found.");
+            const isAirconChecked = await airconCheckbox.evaluate(el => (el as HTMLInputElement).checked);
+            if (isAirconChecked !== aircon) {
+                await airconCheckbox.click();
+            }
+
+            await FBSInteractor.sleep(2000);
+
             console.log("Submitting booking...");
             const createBookingBtn = await bookingFrame.$('input[id="btnCreateBooking"]');
             if (!createBookingBtn) throw new ExpectedElementNotFound("Create Booking button not found.");
@@ -353,7 +369,17 @@ export default FBSInteractor;
 // Usage Example:
 // (async () => {
 //     try {
-//         const bookingRef = await FBSInteractor.bookSlot("2024-09-07 18:00:00", "2024-09-07 19:30:00", "Gym Booking - Test User", 10, "Student Activities", 2);
+//         const bookingRef = await FBSInteractor.bookSlot(
+//             "2024-09-07 18:00:00",
+//             "2024-09-07 19:30:00",
+//             "Gym Booking - Test User",
+//             10,
+//             "Student Activities",
+//             2,
+//             true,   // doorAccess
+//             false, // aircon
+//             credentials,
+//         );
 //         console.log("Booking reference:", bookingRef);
 //     } catch (e) {
 //         console.error("Failed to book:", e);
