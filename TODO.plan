@@ -1,0 +1,26 @@
+# TODO Plan
+# WIP 
+- [ ] Add proxy for FBSInteraactor
+
+# Bugs
+- [ ] GoogleSheetsService year rollover updating bug (doesn't update for >= 1/1/2025)
+- [ ] Last 30 mins EoD booking bug
+- [ ] Paging doesn't return all bookings
+
+# Features
+- [ ] Booking to FBSBooking converter
+- [ ] FBSBooking Service (goes from FBSRequest and uses FBSInteractor)
+- [ ] CRON of Timetable
+- [ ] Set up proxy for FBSInteractor
+
+# User Experience
+- [ ] Notifications
+
+# Developer Experience
+- [ ] Move bot commands to /commands folder
+- [ ] Refactor to monorepo
+- [ ] Staging, dev, main deployment split
+- [ ] Unit testing
+- [ ] Move google sheets service to luxon
+- [ ] Better logging (not just console.log)
+- [ ] Move to OpenAPI fetch
