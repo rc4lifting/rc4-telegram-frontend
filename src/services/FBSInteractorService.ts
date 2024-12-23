@@ -1,5 +1,6 @@
 import { Browser, Page, ElementHandle, Frame } from "puppeteer";
 import puppeteer from "puppeteer";
+import fs from "fs";
 
 interface UsageTypeSignature {
     [key: string]: string;
@@ -60,7 +61,7 @@ export class FBSInteractor {
         doorAccess: boolean,
         aircon: boolean,
         credentials: Credentials
-    ): Promise<string | undefined> {
+    ): Promise<{ bookingId: string; preSubmitScreenshot: string; confirmationScreenshot: string }> {
         console.log("Starting booking process...");
 
         const [date, time] = startTime.split(" ");
@@ -102,7 +103,12 @@ export class FBSInteractor {
             console.log("Launching browser...");
             browser = await puppeteer.launch({
                 headless: false,
-                executablePath: process.env.CHROME_PATH
+                executablePath: process.env.CHROME_PATH,
+                args: [
+                    '--proxy-server=socks5://localhost:1080',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox'
+                ]
             });
 
             console.log("Opening new page...");
@@ -284,6 +290,14 @@ export class FBSInteractor {
 
             await FBSInteractor.sleep(2000);
 
+            // Take pre-submission screenshot
+            console.log("Taking pre-submission screenshot...");
+            const preSubmitScreenshotPath = `booking-form-${Date.now()}.png`;
+            await page.screenshot({
+                path: preSubmitScreenshotPath,
+                fullPage: true
+            });
+
             console.log("Submitting booking...");
             const createBookingBtn = await bookingFrame.$('input[id="btnCreateBooking"]');
             if (!createBookingBtn) throw new ExpectedElementNotFound("Create Booking button not found.");
@@ -295,6 +309,10 @@ export class FBSInteractor {
             if (errorMsgElement) {
                 const errorMessage = await bookingFrame.$eval('#labelMessage1', el => el.textContent?.trim());
                 if (errorMessage) {
+                    // Clean up pre-submission screenshot before throwing error
+                    if (fs.existsSync(preSubmitScreenshotPath)) {
+                        fs.unlinkSync(preSubmitScreenshotPath);
+                    }
                     if (errorMessage.includes("Start time must be 30 minutes before currenttime") || errorMessage.includes("End time must be later than start time")) {
                         throw new InvalidBookingTimeException(errorMessage);
                     } else if (errorMessage.includes("The specified slot is booked by another user")) {
@@ -310,7 +328,6 @@ export class FBSInteractor {
             console.log("Getting booking reference number...");
             await bookingFrame.waitForSelector('table#BookingReferenceNumber tr td', {visible: true});
             
-
             const bookingId = await bookingFrame.evaluate(() => {
                 const elements = document.querySelectorAll('table#BookingReferenceNumber tr td');
                 return elements[1]?.textContent?.trim() || undefined;
@@ -321,15 +338,20 @@ export class FBSInteractor {
             }
             
             console.log(`Booking completed successfully with reference number: ${bookingId}`);
-            // Take a screenshot of the confirmation page
-            console.log("Saving confirmation screenshot...");
-            const screenshotPath = `booking-confirmation-${Date.now()}.png`;
+            
+            // Take confirmation screenshot
+            console.log("Taking confirmation screenshot...");
+            const confirmationScreenshotPath = `booking-confirmation-${bookingId}.png`;
             await page.screenshot({
-                path: screenshotPath,
+                path: confirmationScreenshotPath,
                 fullPage: true
             });
-            console.log(`Screenshot saved as ${screenshotPath}`);
-            return bookingId;
+
+            return {
+                bookingId,
+                preSubmitScreenshot: preSubmitScreenshotPath,
+                confirmationScreenshot: confirmationScreenshotPath
+            };
 
         } catch (error: any) {
             console.error("Booking process failed at stage:", error);

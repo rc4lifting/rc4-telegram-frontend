@@ -6,6 +6,35 @@ import { updateVenueDataInSheets } from "./services/VenueDataService";
 import { DateTime } from "luxon";
 import { CronJob } from "cron";
 import { AuthContext, apiRequest } from "./services/VenueDataService";
+import { FBSRequestService } from "./services/FBSRequestService";
+import { FBSInteractor, InvalidBookingTimeException, SlotTakenException } from "./services/FBSInteractorService";
+import fs from 'fs';
+import path from 'path';
+
+// Load credentials if they exist
+let fbsCredentials: { users: Array<{ telegram_id: number; utownfbs_username: string; utownfbs_password: string; }> } | null = null;
+try {
+  const credentialsPath = path.join(process.cwd(), 'credentials.json');
+  if (fs.existsSync(credentialsPath)) {
+    fbsCredentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
+  }
+} catch (error) {
+  console.warn('Failed to load credentials.json:', error);
+}
+
+// ██████╗  █████╗██╗  ██╗    ██╗     ██╗███████╗████████╗██╗███╗   ██╗ ██████╗ 
+// ██╔══██╗██╔════╝██║  ██║    ██║     ██║██╔════╝╚══██╔══╝██║████╗  ██║██╔════╝ 
+// ██████╔╝██║     ███████║    ██║     ██║█████╗     ██║   ██║██╔██╗ ██║██║  ███╗
+// ██╔══██╗██║     ╚════██║    ██║     ██║██╔══╝     ██║   ██║██║╚██╗██║██║   ██║
+// ██║  ██║╚██████╗     ██║    ███████╗██║██║        ██║   ██║██║ ╚████║╚██████╔╝
+// ╚═╝  ╚═╝ ╚═════╝     ╚═╝    ╚══════╝╚═╝╚═╝        ╚═╝   ╚═╝╚═╝  ╚═══╝ ╚═════╝ 
+//               __       __
+//               '.'--.--'.-'
+// .,_------.___,   \' r'
+// ', '-._a      '-' .'
+//  '.    '-'Y \._  /
+//    '--;____'--.'-,
+// rc4 /..'       '''
 
 export type BookingStep = "start_date" | "start_time" | "end_date" | "end_time" | "confirm";
 
@@ -785,7 +814,7 @@ function getVenueEmoji(venueName: string): string {
     TR3: "🎨",
     TR4: "🎨",
     Gym: "🏋️",
-    MPSH: "🏀",
+    MPSH: "�",
   };
   return emojiMap[venueName] || "🏢";
 }
@@ -960,7 +989,7 @@ async function showBookings(ctx: SessionContext, page: number, isRefresh = false
       const venueName = venue ? venue.name : `Unknown (ID: ${booking.venue_id})`;
 
       bookingLines.push(
-        `📌 *Booking ${(page - 1) * PAGE_SIZE + i + 1}*\n` +
+        `📌 *Booking ${(page - 1) * PAGE_SIZE + i + 1}* (ID: \`${booking.id}\`)\n` +
         `🏢 *Venue:* ${venueName}\n` +
         `📝 *Description:* ${booking.desc}\n` +
         `🕒 *Start:* ${startTime}\n` +
@@ -1199,7 +1228,192 @@ bot.command("timesheet", async (ctx) => {
   }
 });
 
+// Admin command to book directly through FBS
+bot.command("admin_bookfbs", async (ctx) => {
+  console.log("[admin_bookfbs] Command initiated");
+  try {
+    // Check if user is in credentials.json
+    console.log("[admin_bookfbs] Checking user authorization...");
+    if (!fbsCredentials || !ctx.from?.id || !fbsCredentials.users.some(u => u.telegram_id === ctx.from!.id)) {
+      console.log("[admin_bookfbs] Authorization failed for user:", ctx.from?.id);
+      await ctx.reply("❌ You are not authorized to use this command.");
+      return;
+    }
+    console.log("[admin_bookfbs] User authorized");
 
+    // Parse command arguments
+    const args = ctx.message.text.split(" ").slice(1);
+    console.log("[admin_bookfbs] Parsed arguments:", args);
+
+    if (args.length < 5) {
+      console.log("[admin_bookfbs] Invalid number of arguments");
+      await ctx.reply(
+        "❌ Invalid format. Use:\n" +
+        "/admin_bookfbs <venue> <date> <start_time> to <end_time> [aircon:yes/no] [door:yes/no] [purpose]\n\n" +
+        "Example: /admin_bookfbs SR1 2024-12-25 10:00 to 12:00 aircon:yes door:yes Test Booking\n" +
+        "Note: aircon and door access are optional and default to yes",
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+
+    const venue = args[0]
+    const date = args[1];
+    const startTime = args[2];
+    const endTime = args[4];
+    console.log("[admin_bookfbs] Basic booking details:", { venue, date, startTime, endTime });
+    
+    // Parse aircon and door access options
+    let aircon = true;
+    let doorAccess = true;
+    let purposeStartIndex = 5;
+
+    // Look for aircon:yes/no and door:yes/no in the remaining arguments
+    console.log("[admin_bookfbs] Parsing optional parameters...");
+    for (let i = 5; i < args.length; i++) {
+      const arg = args[i].toLowerCase();
+      if (arg.startsWith('aircon:')) {
+        aircon = arg === 'aircon:yes';
+        purposeStartIndex = i + 1;
+        console.log("[admin_bookfbs] Found aircon setting:", aircon);
+      } else if (arg.startsWith('door:')) {
+        doorAccess = arg === 'door:yes';
+        purposeStartIndex = i + 1;
+        console.log("[admin_bookfbs] Found door access setting:", doorAccess);
+      }
+    }
+
+    const purpose = args.slice(purposeStartIndex).join(" ") || "Admin Booking";
+    console.log("[admin_bookfbs] Booking purpose:", purpose);
+
+    // Validate venue
+    console.log("[admin_bookfbs] Validating venue...");
+    const venueId = FBSInteractor.VENUES.find(v => v.name === venue)?.id;
+    if (!venueId) {
+      console.log("[admin_bookfbs] Invalid venue:", venue);
+      await ctx.reply("❌ Invalid venue. Available venues: " + 
+        FBSInteractor.VENUES.map(v => v.name).join(", "));
+      return;
+    }
+    console.log("[admin_bookfbs] Venue validated. ID:", venueId);
+
+    // Format dates for FBS
+    console.log("[admin_bookfbs] Parsing dates...");
+    const startDateTime = DateTime.fromFormat(`${date} ${startTime}`, "yyyy-MM-dd HH:mm", { zone: "Asia/Singapore" });
+    const endDateTime = DateTime.fromFormat(`${date} ${endTime}`, "yyyy-MM-dd HH:mm", { zone: "Asia/Singapore" });
+
+    if (!startDateTime.isValid || !endDateTime.isValid) {
+      console.log("[admin_bookfbs] Invalid date/time format:", { startDateTime, endDateTime });
+      await ctx.reply("❌ Invalid date/time format. Use YYYY-MM-DD HH:mm");
+      return;
+    }
+    console.log("[admin_bookfbs] Dates parsed successfully:", { 
+      startDateTime: startDateTime.toISO(), 
+      endDateTime: endDateTime.toISO() 
+    });
+
+    const statusMessage = await ctx.reply("🔄 Processing FBS booking request...");
+    console.log("[admin_bookfbs] Status message sent");
+
+    try {
+      console.log("[admin_bookfbs] Looking up user credentials...");
+      const userCreds = fbsCredentials!.users.find(u => u.telegram_id === ctx.from!.id);
+      if (!userCreds) {
+        console.log("[admin_bookfbs] Credentials not found for user");
+        throw new Error("Could not find your FBS credentials.");
+      }
+      console.log("[admin_bookfbs] Found user credentials");
+
+      const credentials = {
+        utownfbs_username: userCreds.utownfbs_username,
+        utownfbs_password: userCreds.utownfbs_password
+      };
+
+      console.log("[admin_bookfbs] Initiating FBS booking...");
+      const result = await FBSInteractor.bookSlot(
+        startDateTime.toFormat("yyyy-MM-dd HH:mm:ss"),
+        endDateTime.toFormat("yyyy-MM-dd HH:mm:ss"),
+        `${purpose} - Booked by ${ctx.from?.username || "Unknown"}`,
+        venueId,
+        "Student Activities",
+        1,
+        doorAccess,
+        aircon,
+        credentials
+      );
+      console.log("[admin_bookfbs] FBS booking successful. Booking ID:", result.bookingId);
+
+      // Send booking confirmation message
+      console.log("[admin_bookfbs] Sending confirmation message...");
+      await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        statusMessage.message_id,
+        undefined,
+        `✅ FBS Booking successful!\n\n` +
+        `🏢 *Venue:* ${venue}\n` +
+        `📅 *Date:* ${date}\n` +
+        `🕒 *Time:* ${startTime} to ${endTime}\n` +
+        `🚪 *Door Access:* ${doorAccess ? "Yes" : "No"}\n` +
+        `❄️ *Air Conditioning:* ${aircon ? "Yes" : "No"}\n` +
+        `📝 *Purpose:* ${purpose}\n` +
+        `🔖 *Reference:* \`${result.bookingId}\``,
+        { parse_mode: "Markdown" }
+      );
+
+      // Send screenshots
+      console.log("[admin_bookfbs] Processing screenshots...");
+      if (fs.existsSync(result.preSubmitScreenshot)) {
+        console.log("[admin_bookfbs] Sending pre-submission screenshot");
+        await ctx.replyWithPhoto(
+          { source: result.preSubmitScreenshot },
+          { caption: `Pre-submission form (Ref: ${result.bookingId})` }
+        );
+        fs.unlinkSync(result.preSubmitScreenshot);
+        console.log("[admin_bookfbs] Pre-submission screenshot cleaned up");
+      }
+
+      if (fs.existsSync(result.confirmationScreenshot)) {
+        console.log("[admin_bookfbs] Sending confirmation screenshot");
+        await ctx.replyWithPhoto(
+          { source: result.confirmationScreenshot },
+          { caption: `Booking confirmation (Ref: ${result.bookingId})` }
+        );
+        fs.unlinkSync(result.confirmationScreenshot);
+        console.log("[admin_bookfbs] Confirmation screenshot cleaned up");
+      }
+
+    } catch (error) {
+      console.error("[admin_bookfbs] Error during booking process:", error);
+      let errorMessage = "Unknown error occurred";
+      
+      if (error instanceof InvalidBookingTimeException) {
+        errorMessage = "Invalid booking time. Please ensure the booking is at least 30 minutes in the future.";
+      } else if (error instanceof SlotTakenException) {
+        errorMessage = "This slot is already booked by another user.";
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+
+      await ctx.telegram.editMessageText(
+        ctx.chat!.id,
+        statusMessage.message_id,
+        undefined,
+        `❌ FBS Booking failed: ${errorMessage}`
+      );
+    }
+  } catch (error) {
+    console.error("[admin_bookfbs] Unexpected error:", error);
+    await ctx.reply("An error occurred while processing your request.");
+  }
+});
+
+bot.on('callback_query', async (ctx) => {
+  // NOTE: This is a hack to get the callback query to work, it will intercept all callback queries and forward them to the actual handler
+  // needs to be last handler!
+  if (ctx.callbackQuery && 'data' in ctx.callbackQuery) {
+    await calendar.handleCallbackQuery(ctx);
+  }
+});
 // Launch the bot
 bot.launch().catch((err) => {
   console.error("Error launching bot:", err);
