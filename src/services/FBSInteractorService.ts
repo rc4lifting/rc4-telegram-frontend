@@ -102,7 +102,7 @@ export class FBSInteractor {
         try {
             console.log("Launching browser...");
             browser = await puppeteer.launch({
-                headless: false,
+                headless: true,
                 executablePath: process.env.CHROME_PATH,
                 args: [
                     '--proxy-server=socks5://localhost:1080',
