@@ -3,6 +3,5 @@ version: '3.8'
 services:
   bot:
     build: .
-    restart: always
-    env_file: .env
+    env_file: ./secrets/${ENV:-dev}/.env
     network_mode: "host"
