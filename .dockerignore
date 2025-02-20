@@ -4,3 +4,6 @@ dist
 .git
 .gitignore
 README.md
+secrets/*
+credentials.json
+.env

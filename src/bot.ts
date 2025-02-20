@@ -14,7 +14,7 @@ import path from 'path';
 // Load credentials if they exist
 let fbsCredentials: { users: Array<{ telegram_id: number; utownfbs_username: string; utownfbs_password: string; }> } | null = null;
 try {
-  const credentialsPath = path.join(process.cwd(), 'credentials.json');
+  const credentialsPath = path.join(process.cwd(), 'secrets/credentials.json');
   if (fs.existsSync(credentialsPath)) {
     fbsCredentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
   }
@@ -814,7 +814,7 @@ function getVenueEmoji(venueName: string): string {
     TR3: "🎨",
     TR4: "🎨",
     Gym: "🏋️",
-    MPSH: "�",
+    MPSH: "🏋️",
   };
   return emojiMap[venueName] || "🏢";
 }
