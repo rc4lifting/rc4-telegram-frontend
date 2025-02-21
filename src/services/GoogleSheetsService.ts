@@ -306,9 +306,8 @@ export class GoogleSheetsService {
       for (let i = 0; i < timeSlots.length; i++) {
         const slotStartStr = timeSlots[i].time.split(' - ')[0];
         const [slotHour, slotMin] = slotStartStr.split(':').map(Number);
-        const slotTime = DateTime.fromISO(dateStr)
-          .set({ hour: slotHour, minute: slotMin })
-          .setZone(this.TIMEZONE);
+        const slotTime = DateTime.fromISO(dateStr, { zone: this.TIMEZONE })
+          .set({ hour: slotHour, minute: slotMin });
 
         if (slotTime >= startDateTime && slotTime < endDateTime) {
           rows[i][dateColumn] = bookerName;
