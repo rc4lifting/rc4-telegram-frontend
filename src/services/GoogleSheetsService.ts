@@ -187,8 +187,12 @@ export class GoogleSheetsService {
       return {
         Venue: venue?.name || 'Unknown',
         Description: booking.desc,
-        'Start Time': DateTime.fromISO(booking.start_time, { zone: this.TIMEZONE }).toFormat('dd/MM/yyyy HH:mm'),
-        'End Time': DateTime.fromISO(booking.end_time, { zone: this.TIMEZONE }).toFormat('dd/MM/yyyy HH:mm'),
+        'Start Time': DateTime.fromISO(booking.start_time)
+          .setZone(this.TIMEZONE)
+          .toFormat('dd/MM/yyyy HH:mm'),
+        'End Time': DateTime.fromISO(booking.end_time)
+          .setZone(this.TIMEZONE)
+          .toFormat('dd/MM/yyyy HH:mm'),
         'Booked By': bookers,
         Status: 'Active'
       };
@@ -290,8 +294,9 @@ export class GoogleSheetsService {
     dates: string[],
     booking: components["schemas"]["GetBookingRequest"]
   ) {
-    const startDateTime = DateTime.fromISO(booking.start_time, { zone: this.TIMEZONE });
-    const endDateTime = DateTime.fromISO(booking.end_time, { zone: this.TIMEZONE });
+    // Parse the ISO strings (stored in UTC) then convert to the target timezone.
+    const startDateTime = DateTime.fromISO(booking.start_time).setZone(this.TIMEZONE);
+    const endDateTime = DateTime.fromISO(booking.end_time).setZone(this.TIMEZONE);
     const bookerName = booking.users?.[0]?.name || 'Unknown';
 
     let current = startDateTime.startOf('day');
