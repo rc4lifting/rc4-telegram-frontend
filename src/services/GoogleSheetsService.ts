@@ -13,10 +13,11 @@ export class GoogleSheetsService {
   private metadataTitle = 'Metadata';
   private summaryTitle = 'Summary';
 
-  private readonly TIMEZONE = 'Asia/Singapore';
-  private readonly LOCALE = 'en-SG';
+  private readonly TIMEZONE: string;
 
-  constructor(spreadsheetId: string) {
+  constructor(spreadsheetId: string, timeZone?: string) {
+    this.TIMEZONE = timeZone || Bun.env.TIMEZONE || 'Asia/Singapore';
+
     const email = Bun.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
     const privateKey = Bun.env.GOOGLE_PRIVATE_KEY;
     if (!email || !privateKey) {
@@ -289,8 +290,8 @@ export class GoogleSheetsService {
     dates: string[],
     booking: components["schemas"]["GetBookingRequest"]
   ) {
-    const startDateTime = DateTime.fromISO(booking.start_time);
-    const endDateTime = DateTime.fromISO(booking.end_time);
+    const startDateTime = DateTime.fromISO(booking.start_time, { zone: this.TIMEZONE });
+    const endDateTime = DateTime.fromISO(booking.end_time, { zone: this.TIMEZONE });
     const bookerName = booking.users?.[0]?.name || 'Unknown';
 
     let current = startDateTime.startOf('day');
