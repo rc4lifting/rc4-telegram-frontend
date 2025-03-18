@@ -73,7 +73,13 @@ class FBSInteractor {
         }
 
         const start_time_form_value = "1800/01/01" + " " + time;
-        const end_time_form_value = "1800/01/01" + " " + time_end;
+        let end_time_form_value;
+        if (time_end === "00:00:00") {
+            end_time_form_value = "1800/01/02" + " " + time_end;
+        } else {
+            end_time_form_value = "1800/01/01" + " " + time_end;
+        }
+
 
         if (!usageType) {
             throw new Error("Usage Type is not provided");
@@ -113,6 +119,7 @@ class FBSInteractor {
             console.log("Clicking student login button...");
             await page.waitForSelector('span[id="StudentLoginButton"]', { visible: true });
             await page.click('span[id="StudentLoginButton"]');
+            await FBSInteractor.sleep(2000);
 
             console.log("Logging in...");
             await page.waitForSelector('input[id="userNameInput"]', { visible: true });
